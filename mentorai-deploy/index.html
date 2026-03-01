@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>MentorAI — Your Growth Companion</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet"/>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -476,8 +476,28 @@ pointer-events:none;z-index:0}
 // ═══════════════════════════════════════════════════════════════
 const SUPABASE_URL = 'https://odoxoyiyysuukgpdzhvt.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9kb3hveWl5eXN1dWtncGR6aHZ0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNTY5NzksImV4cCI6MjA4NzkzMjk3OX0.sDcg4VmA8n2o0hiLbKJyeqMDcIy_R9EECbIc3ChOMRQ';
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+// sb = our supabase client (avoid conflict with window.supabase from CDN)
+let sb;
 let currentUser = null;
+try {
+  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+} catch(e) {
+  console.error('Supabase init error:', e);
+  sb = {
+    auth: {
+      signInWithPassword: async()=>({error:{message:'Auth service unavailable. Please try again.'}}),
+      signUp: async()=>({data:{user:null},error:{message:'Auth service unavailable. Please try again.'}}),
+      signOut: async()=>({}),
+      getSession: async()=>({data:{session:null}}),
+      onAuthStateChange: ()=>({data:{subscription:{unsubscribe:()=>{}}}})
+    },
+    from: ()=>({
+      select: ()=>({ eq: ()=>({ single: async()=>({data:null,error:true}), order: ()=>({ limit: async()=>({data:[],error:null}) }) }) }),
+      upsert: async()=>({error:null}),
+      insert: async()=>({error:null})
+    })
+  };
+}
 
 // ── AUTH TAB SWITCH ──────────────────────────────────────────
 function switchTab(mode){
@@ -515,7 +535,7 @@ async function handleAuth(){
   try {
     if(isLogin){
       // ── SIGN IN ──
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error } = await sb.auth.signInWithPassword({ email, password });
       if(error) throw error;
       currentUser = data.user;
       await loadUserProfile();
@@ -528,7 +548,7 @@ async function handleAuth(){
       if(!age){ showAuthMsg('Please enter your age.', 'err'); btn.disabled=false; btn.textContent='Create Account →'; return; }
       if(!gender){ showAuthMsg('Please select your gender.', 'err'); btn.disabled=false; btn.textContent='Create Account →'; return; }
 
-      const { data, error } = await supabase.auth.signUp({ email, password });
+      const { data, error } = await sb.auth.signUp({ email, password });
       if(error) throw error;
       currentUser = data.user;
 
@@ -541,7 +561,7 @@ async function handleAuth(){
       profile.lastVisit = new Date().toDateString();
 
       // Create profile row in Supabase
-      await supabase.from('user_profiles').upsert({
+      await sb.from('user_profiles').upsert({
         id: currentUser.id,
         name, age: parseInt(age), gender,
         persona: 'coach', xp: 0, level: 1, streak: 1,
@@ -565,7 +585,7 @@ async function handleAuth(){
 
 // ── LOAD EXISTING USER PROFILE ───────────────────────────────
 async function loadUserProfile(){
-  const { data, error } = await supabase.from('user_profiles').select('*').eq('id', currentUser.id).single();
+  const { data, error } = await sb.from('user_profiles').select('*').eq('id', currentUser.id).single();
   if(error || !data){
     // New user — go to onboarding
     goTo('screen-onboard');
@@ -592,7 +612,7 @@ async function loadUserProfile(){
   profile.keys = { claude:'server', openai:'server', gemini:'server' };
 
   // Load chat messages
-  const { data: msgs } = await supabase.from('chat_messages')
+  const { data: msgs } = await sb.from('chat_messages')
     .select('*').eq('user_id', currentUser.id)
     .order('created_at', { ascending: true }).limit(40);
   messages = (msgs || []).map(m => ({ role: m.role, content: m.content, model: m.model, reason: m.reason }));
@@ -604,7 +624,7 @@ async function loadUserProfile(){
 // ── SAVE PROFILE TO SUPABASE ─────────────────────────────────
 async function saveProfileToSupabase(){
   if(!currentUser) return;
-  await supabase.from('user_profiles').upsert({
+  await sb.from('user_profiles').upsert({
     id: currentUser.id,
     name: profile.name,
     age: profile.age ? parseInt(profile.age) : null,
@@ -628,7 +648,7 @@ async function saveProfileToSupabase(){
 // ── SAVE MESSAGE TO SUPABASE ─────────────────────────────────
 async function saveMessageToSupabase(msg){
   if(!currentUser) return;
-  await supabase.from('chat_messages').insert({
+  await sb.from('chat_messages').insert({
     user_id: currentUser.id,
     role: msg.role,
     content: msg.content,
@@ -639,7 +659,7 @@ async function saveMessageToSupabase(msg){
 
 // ── SIGN OUT ─────────────────────────────────────────────────
 async function signOut(){
-  await supabase.auth.signOut();
+  await sb.auth.signOut();
   currentUser = null;
   messages = [];
   localStorage.clear();
@@ -1801,26 +1821,45 @@ ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefa
 // ═══════════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════════
-// ── CHECK AUTH STATE ON LOAD ────────────────────────────────
-// Show auth screen by default — Supabase will redirect if already logged in
-document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
-document.getElementById('screen-auth').classList.remove('hidden');
-switchTab('login'); // default to login tab
+// ── INIT ON DOM READY ───────────────────────────────────────
+function startApp() {
+  try {
+    // Hide all screens first
+    document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
+    // Show auth screen
+    document.getElementById('screen-auth').classList.remove('hidden');
+    switchTab('login');
 
-// Check if user already has an active session
-supabase.auth.getSession().then(({ data: { session } }) => {
-  if(session){
-    currentUser = session.user;
-    loadUserProfile();
-  }
-});
+    // Check if user already has active session
+    sb.auth.getSession().then(({ data: { session } }) => {
+      if(session && session.user){
+        currentUser = session.user;
+        loadUserProfile();
+      }
+    }).catch(err => {
+      console.error('Session check failed:', err);
+    });
 
-// Listen for auth state changes
-supabase.auth.onAuthStateChange((event, session) => {
-  if(event === 'SIGNED_IN' && session){
-    currentUser = session.user;
+    // Listen for auth changes
+    sb.auth.onAuthStateChange((event, session) => {
+      if(event === 'SIGNED_IN' && session){
+        currentUser = session.user;
+      }
+    });
+  } catch(err) {
+    console.error('App init error:', err);
+    // Fallback — show auth screen manually
+    document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
+    const authEl = document.getElementById('screen-auth');
+    if(authEl) authEl.classList.remove('hidden');
   }
-});
+}
+
+if(document.readyState === 'loading'){
+  document.addEventListener('DOMContentLoaded', startApp);
+} else {
+  startApp();
+}
 </script>
 </body>
 </html>
