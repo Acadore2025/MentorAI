@@ -5,16 +5,19 @@
 // Keyword-based fallback router
 function smartRoute(msg) {
   const l = msg.toLowerCase();
-  if (process.env.GEMINI_API_KEY && (l.includes('trend') || l.includes('market') || l.includes('latest') || l.includes('2025')))
-    return JSON.stringify({model:'gemini', reason:'Trend/market query'});
-  if (process.env.ANTHROPIC_API_KEY && (l.includes('career') || l.includes('goal') || l.includes('life') || l.includes('feeling')))
+  // Only route to models that actually have keys configured
+  const hasOpenAI = !!process.env.OPENAI_API_KEY;
+  const hasClaude = !!process.env.ANTHROPIC_API_KEY;
+  const hasGemini = !!process.env.GEMINI_API_KEY;
+
+  if (hasGemini && (l.includes('trend') || l.includes('market') || l.includes('latest') || l.includes('news')))
+    return JSON.stringify({model:'gemini', reason:'Trend query'});
+  if (hasClaude && (l.includes('career') || l.includes('goal') || l.includes('life') || l.includes('feeling') || l.includes('emotion')))
     return JSON.stringify({model:'claude', reason:'Career/life query'});
-  if (process.env.OPENAI_API_KEY)
-    return JSON.stringify({model:'openai', reason:'Auto-selected'});
-  if (process.env.ANTHROPIC_API_KEY)
-    return JSON.stringify({model:'claude', reason:'Auto-selected'});
-  if (process.env.GEMINI_API_KEY)
-    return JSON.stringify({model:'gemini', reason:'Auto-selected'});
+  // Default to first available key
+  if (hasOpenAI) return JSON.stringify({model:'openai', reason:'Auto-selected'});
+  if (hasClaude) return JSON.stringify({model:'claude', reason:'Auto-selected'});
+  if (hasGemini) return JSON.stringify({model:'gemini', reason:'Auto-selected'});
   return JSON.stringify({model:'openai', reason:'Default'});
 }
 
