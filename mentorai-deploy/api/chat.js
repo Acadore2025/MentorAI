@@ -1,6 +1,23 @@
 // MentorAI — Secure API Proxy
 // All API keys live HERE on the server. Users never see them.
 
+
+// Keyword-based fallback router
+function smartRoute(msg) {
+  const l = msg.toLowerCase();
+  if (process.env.GEMINI_API_KEY && (l.includes('trend') || l.includes('market') || l.includes('latest') || l.includes('2025')))
+    return JSON.stringify({model:'gemini', reason:'Trend/market query'});
+  if (process.env.ANTHROPIC_API_KEY && (l.includes('career') || l.includes('goal') || l.includes('life') || l.includes('feeling')))
+    return JSON.stringify({model:'claude', reason:'Career/life query'});
+  if (process.env.OPENAI_API_KEY)
+    return JSON.stringify({model:'openai', reason:'Auto-selected'});
+  if (process.env.ANTHROPIC_API_KEY)
+    return JSON.stringify({model:'claude', reason:'Auto-selected'});
+  if (process.env.GEMINI_API_KEY)
+    return JSON.stringify({model:'gemini', reason:'Auto-selected'});
+  return JSON.stringify({model:'openai', reason:'Default'});
+}
+
 export default async function handler(req, res) {
   // Allow requests from your Vercel app only
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -17,6 +34,7 @@ export default async function handler(req, res) {
 
     // ── CLAUDE ──────────────────────────────────────────────
     if (model === 'claude') {
+      if (!process.env.ANTHROPIC_API_KEY) return res.status(400).json({ error: 'Claude API key not configured on server. Please add ANTHROPIC_API_KEY in Vercel settings.' });
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -41,6 +59,7 @@ export default async function handler(req, res) {
 
     // ── OPENAI ───────────────────────────────────────────────
     else if (model === 'openai') {
+      if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: 'OpenAI API key not configured on server. Please add OPENAI_API_KEY in Vercel settings.' });
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -63,6 +82,7 @@ export default async function handler(req, res) {
 
     // ── GEMINI ───────────────────────────────────────────────
     else if (model === 'gemini') {
+      if (!process.env.GEMINI_API_KEY) return res.status(400).json({ error: 'Gemini API key not configured on server. Please add GEMINI_API_KEY in Vercel settings.' });
       const contents = messages.map(m => ({
         role: m.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: m.content }]
@@ -87,25 +107,32 @@ export default async function handler(req, res) {
       reply = data.candidates[0].content.parts[0].text;
     }
 
-    // ── ROUTER (uses Claude Haiku for cheap routing) ─────────
+    // ── ROUTER — uses best available key ─────────────────────
     else if (model === 'router') {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': process.env.ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01'
-        },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 80,
-          system,
-          messages
-        })
-      });
-      if (!response.ok) throw new Error('Router error');
-      const data = await response.json();
-      reply = data.content[0].text;
+      const userMsg = messages[0]?.content || '';
+      if (process.env.ANTHROPIC_API_KEY) {
+        try {
+          const r = await fetch('https://api.anthropic.com/v1/messages', {
+            method:'POST',
+            headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},
+            body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:80,system,messages})
+          });
+          if(r.ok){ const d=await r.json(); reply=d.content[0].text; }
+          else reply = smartRoute(userMsg);
+        } catch(e){ reply = smartRoute(userMsg); }
+      } else if (process.env.OPENAI_API_KEY) {
+        try {
+          const r = await fetch('https://api.openai.com/v1/chat/completions', {
+            method:'POST',
+            headers:{'Content-Type':'application/json','Authorization':`Bearer ${process.env.OPENAI_API_KEY}`},
+            body:JSON.stringify({model:'gpt-4o-mini',max_tokens:80,messages:[{role:'system',content:system},...messages]})
+          });
+          if(r.ok){ const d=await r.json(); reply=d.choices[0].message.content; }
+          else reply = smartRoute(userMsg);
+        } catch(e){ reply = smartRoute(userMsg); }
+      } else {
+        reply = smartRoute(userMsg);
+      }
     }
 
     else {
