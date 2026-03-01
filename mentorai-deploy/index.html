@@ -1466,6 +1466,7 @@ function activateStudyMode(topic, style, days){
 
 function renderStudyBanner(){
   const banner = document.getElementById('study-banner');
+  if(!banner) return;
   if(!studyMode.active){ banner.style.display='none'; return; }
   banner.style.display = 'block';
   banner.innerHTML = `
@@ -2142,5 +2143,3 @@ if(document.readyState === 'loading'){
 </script>
 </body>
 </html>
-
-
