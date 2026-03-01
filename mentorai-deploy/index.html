@@ -1043,6 +1043,29 @@ function saveKeysAndStart(){
   profile.xp = 0; profile.level = 1; profile.streak = 1;
   profile.lastVisit = new Date().toDateString();
   saveProfile();
+  // Force immediate Supabase sync so profile persists across sessions
+  if(currentUser) {
+    sb.from('user_profiles').upsert({
+      id: currentUser.id,
+      name: profile.name || '',
+      age: profile.age ? parseInt(profile.age) : null,
+      gender: profile.gender || null,
+      role: profile.role || null,
+      goal: profile.goal || null,
+      timeline: profile.timeline || null,
+      learn_style: profile.learnStyle || null,
+      personality_type: profile.personalityType || null,
+      personality_emoji: profile.personalityEmoji || null,
+      personality_desc: profile.personalityDesc || null,
+      persona: profile.persona || 'coach',
+      traits: profile.traits || {},
+      xp: 0, level: 1, streak: 1,
+      last_visit: new Date().toDateString()
+    }).then(({error}) => {
+      if(error) console.error('Profile save error:', error);
+      else console.log('Profile saved to Supabase successfully');
+    });
+  }
   launchApp();
 }
 
@@ -1197,7 +1220,7 @@ Execution: ${executionProfile}
 Accountability: ${accountabilityNote}
 ${anxietyNote ? 'Anxiety Pattern: ' + anxietyNote : ''}
 
-WHAT ${p.name.toUpperCase()} HAS SHARED SO FAR (USE THIS IN EVERY RESPONSE):
+WHAT ${(p.name||"THE USER").toUpperCase()} HAS SHARED SO FAR (USE THIS IN EVERY RESPONSE):
 - Scan the entire conversation history carefully
 - Every personal detail, struggle, win, or context they've mentioned is GOLD
 - Reference it naturally: "You mentioned earlier that...", "Given what you told me about X..."
@@ -1354,10 +1377,19 @@ RESPONSE LENGTH OVERRIDE (HIGHEST PRIORITY):
 }
 
 function showWelcomeMessage(){
-  const t = profile.traits;
+  // Safety — wait for profile to be fully loaded
+  const name = profile.name || 'there';
+  const firstName = name.split(' ')[0];
+  const t = profile.traits || {};
   const isDisciplined = (t.conscientiousness||0) >= 60;
   const hasExecutionGap = (t.executionGap||0) >= 60;
   const isAnxious = (t.neuroticism||0) >= 60;
+  const personalityType = profile.personalityType || 'a unique learner';
+  const goal = profile.goal || 'your goals';
+  const timeline = profile.timeline || 'your timeline';
+  const learnStyle = profile.learnStyle || 'your own style';
+  const personalityDesc = profile.personalityDesc || '';
+  const persona = profile.persona || 'friend';
 
   const behaviorNote = hasExecutionGap
     ? `Your assessment shows you're a big thinker with an execution gap — you have more ideas than completed projects. I've seen this pattern a hundred times.`
@@ -1370,16 +1402,16 @@ function showWelcomeMessage(){
     : '';
 
   const greetings = {
-    coach:`${profile.name}. Let's get one thing straight — I don't do motivation speeches. I do reality checks.\n\nYou're a **${profile.personalityType}**. ${behaviorNote}${anxietyLine}\n\nYour goal: **${profile.goal}**. Timeline: **${profile.timeline}**.\n\nBefore I give you a single piece of advice, I need to know: **What have you already tried? And why do you think it didn't work?**\n\nDon't give me a two-word answer. Be specific. That's where we start.`,
+    coach:`Hi ${firstName}! 👋 Let's get one thing straight — I don't do motivation speeches. I do reality checks.\n\nYou're a **${personalityType}**. ${behaviorNote}${anxietyLine}\n\nYour goal: **${goal}**. Timeline: **${timeline}**.\n\nBefore I give you a single piece of advice, I need to know: **What have you already tried? And why do you think it didn't work?**\n\nDon't give me a two-word answer. Be specific. That's where we start.`,
 
-    strategist:`${profile.name}, good to have you here. I've looked at your profile.\n\nYou're a **${profile.personalityType}**. ${behaviorNote}${anxietyLine}\n\n**Goal:** ${profile.goal} | **Timeline:** ${profile.timeline} | **Learning style:** ${profile.learnStyle||'not yet assessed'}\n\nBefore I build your roadmap, I need to run a quick diagnostic. Tell me:\n1. Where are you right now — in one honest paragraph\n2. What does "success" look like to you in concrete, measurable terms\n3. What's the single biggest obstacle between now and that outcome\n\nBe precise. Vague inputs give vague outputs.`,
+    strategist:`Hi ${firstName}! 👋 Good to have you here. I've looked at your profile.\n\nYou're a **${personalityType}**. ${behaviorNote}${anxietyLine}\n\n**Goal:** ${goal} | **Timeline:** ${timeline} | **Learning style:** ${learnStyle}\n\nBefore I build your roadmap, I need to run a quick diagnostic. Tell me:\n1. Where are you right now — in one honest paragraph\n2. What does "success" look like to you in concrete, measurable terms\n3. What's the single biggest obstacle between now and that outcome\n\nBe precise. Vague inputs give vague outputs.`,
 
-    friend:`Hey ${profile.name}! Okay so I've gone through your whole profile and I have thoughts 😄\n\nYou're what I'd call a **${profile.personalityType}** — ${profile.personalityDesc}\n\n${behaviorNote}${anxietyLine}\n\nHonestly? A lot of people in India with your profile get stuck because they're trying to follow someone else's roadmap — the "safe job", the MBA, the peer pressure moves. And it never quite fits.\n\nSo before anything else — tell me what's actually been going on. What's the real situation? No polished version. Just the honest one.`,
+    friend:`Hey ${firstName}! 👋 So glad you're here. I've gone through your whole profile and I have thoughts 😄\n\nYou're what I'd call a **${personalityType}** — ${personalityDesc}\n\n${behaviorNote}${anxietyLine}\n\nHonestly? A lot of people with your profile get stuck because they're trying to follow someone else's roadmap. It never quite fits.\n\nSo before anything else — tell me what's actually been going on. What's the real situation? No polished version. Just the honest one.`,
 
-    sage:`${profile.name}.\n\nYou've taken a step most people never take — deciding to examine their path intentionally rather than just following the current.\n\nYou are **${profile.personalityType}**. ${profile.personalityDesc}\n\n${behaviorNote}\n\nBefore I offer any guidance, I want to ask you something. And I want you to sit with it for a moment before answering:\n\n*"${profile.goal}" — is this truly YOUR goal? Or is it what you believe you should want based on what people around you have achieved?*\n\nThere is no wrong answer. But your answer will determine everything about how we work together.`
+    sage:`Hi ${firstName}. 👋\n\nYou've taken a step most people never take — deciding to examine their path intentionally rather than just following the current.\n\nYou are **${personalityType}**. ${personalityDesc}\n\n${behaviorNote}\n\nBefore I offer any guidance, I want to ask you something meaningful:\n\n*"${goal}" — is this truly YOUR goal? Or is it what you believe you should want based on what people around you have achieved?*\n\nThere is no wrong answer. But your answer will determine everything about how we work together.`
   };
 
-  const msg = greetings[profile.persona];
+  const msg = greetings[persona] || greetings['friend'];
   messages.push({role:'assistant',content:msg,model:'claude',reason:'Personalized opening based on your full profile'});
   appendBubble('assistant',msg,'claude','Personalized to your profile & personality');
   saveMessages();
