@@ -1,0 +1,1555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>MentorAI — Your Growth Companion</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root{
+  --bg:#080a0f;
+  --surface:#0f1219;
+  --surface2:#161b25;
+  --surface3:#1d2333;
+  --border:rgba(255,255,255,0.06);
+  --border2:rgba(255,255,255,0.1);
+  --text:#ede9e0;
+  --muted:#6b7280;
+  --muted2:#4b5563;
+  --accent:#e8c87a;
+  --accent2:#5ba4cf;
+  --accent3:#7dd3a8;
+  --danger:#e07070;
+  --coach:#e8825a;
+  --strategist:#5ba4cf;
+  --friend:#7dd3a8;
+  --sage:#a78bfa;
+  --r:14px;
+}
+
+body{font-family:'Outfit',sans-serif;background:var(--bg);color:var(--text);height:100dvh;display:flex;flex-direction:column;overflow:hidden;cursor:default}
+
+body::before{content:'';position:fixed;inset:0;background:
+  radial-gradient(ellipse 70% 50% at 15% 0%,rgba(232,200,122,0.06) 0%,transparent 55%),
+  radial-gradient(ellipse 50% 40% at 85% 100%,rgba(91,164,207,0.05) 0%,transparent 55%),
+  radial-gradient(ellipse 30% 30% at 50% 50%,rgba(125,211,168,0.03) 0%,transparent 50%);
+pointer-events:none;z-index:0}
+
+/* ── SCREENS ── */
+.screen{position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg);overflow-y:auto;padding:24px 20px}
+.screen.hidden{display:none}
+
+/* ── WELCOME SCREEN ── */
+#screen-welcome .logo-big{font-family:'Cormorant Garamond',serif;font-size:clamp(48px,10vw,88px);font-weight:700;line-height:1;text-align:center;margin-bottom:12px}
+#screen-welcome .logo-big span{color:var(--accent)}
+#screen-welcome .tagline{font-size:clamp(14px,2.5vw,18px);color:var(--muted);text-align:center;font-weight:300;max-width:420px;line-height:1.7;margin-bottom:48px}
+.btn-primary{background:linear-gradient(135deg,var(--accent),#d4a850);color:#080a0f;border:none;border-radius:12px;padding:14px 36px;font-size:16px;font-weight:600;cursor:pointer;font-family:'Outfit',sans-serif;transition:all 0.2s;letter-spacing:0.2px}
+.btn-primary:hover{opacity:0.88;transform:translateY(-2px);box-shadow:0 8px 24px rgba(232,200,122,0.25)}
+.btn-ghost{background:transparent;border:1px solid var(--border2);color:var(--muted);border-radius:12px;padding:12px 28px;font-size:14px;cursor:pointer;font-family:'Outfit',sans-serif;transition:all 0.2s}
+.btn-ghost:hover{border-color:var(--accent);color:var(--accent)}
+.floating-tags{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:500px;margin-bottom:48px}
+.ftag{font-size:12px;padding:5px 14px;border-radius:20px;border:1px solid var(--border);color:var(--muted);background:var(--surface)}
+
+/* ── ONBOARDING ── */
+#screen-onboard{background:var(--bg)}
+.onboard-card{background:var(--surface);border:1px solid var(--border);border-radius:24px;padding:clamp(28px,5vw,48px);max-width:560px;width:100%;animation:fadeUp 0.4s ease both}
+.step-indicator{display:flex;gap:6px;margin-bottom:32px;justify-content:center}
+.step-dot{width:8px;height:8px;border-radius:50%;background:var(--surface3);transition:all 0.3s}
+.step-dot.active{background:var(--accent);width:24px;border-radius:4px}
+.step-dot.done{background:var(--accent3)}
+.onboard-q{font-family:'Cormorant Garamond',serif;font-size:clamp(22px,4vw,30px);font-weight:600;margin-bottom:8px;line-height:1.3}
+.onboard-sub{font-size:14px;color:var(--muted);margin-bottom:28px;font-weight:300;line-height:1.6}
+.onboard-input{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:13px 16px;color:var(--text);font-family:'Outfit',sans-serif;font-size:15px;outline:none;transition:border-color 0.2s;margin-bottom:8px}
+.onboard-input:focus{border-color:var(--accent)}
+.onboard-input::placeholder{color:var(--muted2)}
+.choice-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:24px}
+.choice-btn{background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:14px 16px;color:var(--text);cursor:pointer;font-family:'Outfit',sans-serif;font-size:13.5px;text-align:left;transition:all 0.2s;line-height:1.4}
+.choice-btn:hover,.choice-btn.selected{border-color:var(--accent);background:rgba(232,200,122,0.08);color:var(--accent)}
+.choice-btn .choice-icon{font-size:20px;margin-bottom:6px;display:block}
+.onboard-nav{display:flex;justify-content:space-between;align-items:center;margin-top:24px}
+.btn-back{background:transparent;border:none;color:var(--muted);cursor:pointer;font-family:'Outfit',sans-serif;font-size:14px;padding:8px 0}
+.btn-back:hover{color:var(--text)}
+.btn-next{background:var(--accent);color:#080a0f;border:none;border-radius:10px;padding:12px 28px;font-size:14px;font-weight:600;cursor:pointer;font-family:'Outfit',sans-serif;transition:all 0.2s}
+.btn-next:hover{opacity:0.88;transform:translateY(-1px)}
+.btn-next:disabled{opacity:0.35;cursor:not-allowed;transform:none}
+
+/* ── PSYCHOMETRIC ── */
+.psych-q{font-size:15px;color:var(--text);margin-bottom:16px;font-weight:400;line-height:1.6}
+.scale-labels{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:8px}
+.scale-btns{display:flex;gap:8px;margin-bottom:20px}
+.scale-btn{flex:1;height:42px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--muted);cursor:pointer;font-family:'Outfit',sans-serif;font-size:14px;font-weight:500;transition:all 0.2s}
+.scale-btn:hover{border-color:var(--accent);color:var(--accent)}
+.scale-btn.selected{background:var(--accent);border-color:var(--accent);color:#080a0f;font-weight:600}
+.psych-progress{height:3px;background:var(--surface3);border-radius:2px;margin-bottom:28px;overflow:hidden}
+.psych-progress-bar{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;transition:width 0.4s ease}
+
+/* ── PERSONALITY RESULT ── */
+#screen-result{background:var(--bg)}
+.result-card{background:var(--surface);border:1px solid var(--border);border-radius:24px;padding:clamp(28px,5vw,48px);max-width:580px;width:100%;text-align:center;animation:fadeUp 0.5s ease both}
+.result-type{font-family:'Cormorant Garamond',serif;font-size:clamp(32px,6vw,52px);font-weight:700;margin-bottom:8px;line-height:1.1}
+.result-type .highlight{color:var(--accent)}
+.result-desc{font-size:14px;color:var(--muted);line-height:1.7;margin-bottom:32px;font-weight:300}
+.traits-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:32px;text-align:left}
+.trait-item{background:var(--surface2);border-radius:12px;padding:14px 16px}
+.trait-label{font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px}
+.trait-bar-wrap{height:4px;background:var(--surface3);border-radius:2px;overflow:hidden}
+.trait-bar{height:100%;border-radius:2px;transition:width 0.8s ease}
+.trait-value{font-size:13px;font-weight:500;margin-top:4px}
+
+/* ── PERSONA SELECTOR ── */
+#screen-persona{background:var(--bg)}
+.persona-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;max-width:560px;width:100%;margin-bottom:28px}
+.persona-card{background:var(--surface);border:2px solid var(--border);border-radius:18px;padding:20px;cursor:pointer;transition:all 0.25s;text-align:left}
+.persona-card:hover{transform:translateY(-3px)}
+.persona-card.selected{transform:translateY(-3px)}
+.persona-card[data-p="coach"]:hover,.persona-card[data-p="coach"].selected{border-color:var(--coach);background:rgba(232,130,90,0.06)}
+.persona-card[data-p="strategist"]:hover,.persona-card[data-p="strategist"].selected{border-color:var(--strategist);background:rgba(91,164,207,0.06)}
+.persona-card[data-p="friend"]:hover,.persona-card[data-p="friend"].selected{border-color:var(--friend);background:rgba(125,211,168,0.06)}
+.persona-card[data-p="sage"]:hover,.persona-card[data-p="sage"].selected{border-color:var(--sage);background:rgba(167,139,250,0.06)}
+.persona-emoji{font-size:28px;margin-bottom:10px}
+.persona-name{font-size:16px;font-weight:600;margin-bottom:4px}
+.persona-card[data-p="coach"] .persona-name{color:var(--coach)}
+.persona-card[data-p="strategist"] .persona-name{color:var(--strategist)}
+.persona-card[data-p="friend"] .persona-name{color:var(--friend)}
+.persona-card[data-p="sage"] .persona-name{color:var(--sage)}
+.persona-desc{font-size:12.5px;color:var(--muted);line-height:1.5;font-weight:300}
+
+/* ── API KEYS SCREEN ── */
+#screen-keys{background:var(--bg)}
+.keys-card{background:var(--surface);border:1px solid var(--border);border-radius:24px;padding:clamp(24px,4vw,40px);max-width:520px;width:100%}
+.keys-title{font-family:'Cormorant Garamond',serif;font-size:28px;font-weight:600;margin-bottom:6px}
+.keys-sub{font-size:13.5px;color:var(--muted);margin-bottom:28px;line-height:1.6;font-weight:300}
+.key-row{margin-bottom:14px}
+.key-row label{font-size:12px;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:7px}
+.key-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.key-row input{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:11px 14px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;outline:none;transition:border-color 0.2s}
+.key-row input:focus{border-color:var(--accent)}
+.key-row input::placeholder{color:var(--muted2)}
+.key-note{font-size:12px;color:var(--muted2);line-height:1.6;margin-bottom:20px}
+
+/* ── MAIN APP ── */
+#screen-app{position:relative;display:flex;flex-direction:column;height:100dvh;z-index:1}
+#screen-app.hidden{display:none}
+
+/* Header */
+.app-header{position:relative;z-index:10;display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--border);background:rgba(8,10,15,0.92);backdrop-filter:blur(14px);flex-wrap:wrap;gap:8px}
+.app-logo{font-family:'Cormorant Garamond',serif;font-size:20px;font-weight:700}
+.app-logo span{color:var(--accent)}
+.user-info{display:flex;align-items:center;gap:10px}
+.user-avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;color:#080a0f}
+.user-name-small{font-size:13px;font-weight:500}
+.user-level{font-size:11px;color:var(--accent);background:rgba(232,200,122,0.1);border:1px solid rgba(232,200,122,0.2);padding:2px 8px;border-radius:10px}
+.header-actions{display:flex;gap:8px;align-items:center}
+.icon-btn{background:transparent;border:1px solid var(--border);border-radius:8px;padding:6px 10px;cursor:pointer;font-size:14px;color:var(--muted);transition:all 0.2s;font-family:'Outfit',sans-serif}
+.icon-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+/* XP Bar */
+.xp-bar-wrap{position:relative;z-index:9;background:rgba(8,10,15,0.8);padding:6px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+.xp-label{font-size:11px;color:var(--muted);white-space:nowrap}
+.xp-bar{flex:1;height:4px;background:var(--surface3);border-radius:2px;overflow:hidden;max-width:200px}
+.xp-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;transition:width 0.6s ease}
+.streak-badge{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--coach);background:rgba(232,130,90,0.1);border:1px solid rgba(232,130,90,0.2);padding:3px 10px;border-radius:20px}
+
+/* Persona indicator */
+.persona-indicator{font-size:11px;padding:3px 10px;border-radius:20px;border:1px solid;font-weight:500}
+.persona-indicator.coach{border-color:rgba(232,130,90,0.4);color:var(--coach);background:rgba(232,130,90,0.06)}
+.persona-indicator.strategist{border-color:rgba(91,164,207,0.4);color:var(--strategist);background:rgba(91,164,207,0.06)}
+.persona-indicator.friend{border-color:rgba(125,211,168,0.4);color:var(--friend);background:rgba(125,211,168,0.06)}
+.persona-indicator.sage{border-color:rgba(167,139,250,0.4);color:var(--sage);background:rgba(167,139,250,0.06)}
+
+/* Chat */
+#chat-container{flex:1;overflow-y:auto;padding:24px 20px;position:relative;z-index:1;scroll-behavior:smooth}
+#chat-container::-webkit-scrollbar{width:3px}
+#chat-container::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.messages-wrap{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
+
+/* Daily checkin */
+.checkin-card{background:linear-gradient(135deg,rgba(232,200,122,0.08),rgba(91,164,207,0.06));border:1px solid rgba(232,200,122,0.15);border-radius:16px;padding:18px 20px;animation:fadeUp 0.4s ease both}
+.checkin-title{font-size:13px;font-weight:600;color:var(--accent);margin-bottom:6px}
+.checkin-text{font-size:14px;color:var(--text);line-height:1.6;margin-bottom:14px;font-weight:300}
+.checkin-btns{display:flex;gap:8px;flex-wrap:wrap}
+.checkin-btn{font-size:12.5px;padding:7px 14px;border-radius:20px;border:1px solid var(--border);background:var(--surface2);color:var(--text);cursor:pointer;font-family:'Outfit',sans-serif;transition:all 0.2s}
+.checkin-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+/* Messages */
+.message{display:flex;gap:12px;animation:fadeUp 0.3s ease both}
+.message.user{flex-direction:row-reverse}
+.msg-avatar{width:32px;height:32px;border-radius:10px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:14px;margin-top:2px}
+.msg-avatar.ai-av{background:linear-gradient(135deg,var(--accent),var(--accent2))}
+.msg-avatar.user-av{background:var(--surface2);border:1px solid var(--border);font-size:12px;font-weight:600;color:var(--muted)}
+.msg-wrap{display:flex;flex-direction:column;gap:5px;max-width:78%}
+.message.user .msg-wrap{align-items:flex-end}
+.bubble{padding:13px 16px;border-radius:14px;font-size:14.5px;line-height:1.8;font-weight:300}
+.message.ai .bubble{background:var(--surface);border:1px solid var(--border);border-top-left-radius:4px}
+.message.user .bubble{background:var(--surface2);border:1px solid rgba(91,164,207,0.1);border-top-right-radius:4px}
+.bubble strong{color:var(--accent);font-weight:500}
+.bubble em{color:var(--accent2);font-style:italic}
+.bubble p{margin-bottom:9px}.bubble p:last-child{margin-bottom:0}
+.bubble ul,.bubble ol{padding-left:18px;margin:7px 0}
+.bubble li{margin-bottom:4px}
+.bubble h3{font-family:'Cormorant Garamond',serif;font-size:17px;color:var(--accent);margin:10px 0 5px;font-weight:600}
+.bubble code{background:rgba(255,255,255,0.06);border-radius:4px;padding:2px 6px;font-size:12.5px}
+.bubble hr{border:none;border-top:1px solid var(--border);margin:10px 0}
+.model-tag{font-size:10.5px;padding:2px 9px;border-radius:12px;border:1px solid;font-weight:500;display:inline-flex;align-items:center;gap:4px;width:fit-content}
+.model-tag.claude{border-color:rgba(232,200,122,0.35);color:var(--accent);background:rgba(232,200,122,0.05)}
+.model-tag.openai{border-color:rgba(125,211,168,0.35);color:var(--accent3);background:rgba(125,211,168,0.05)}
+.model-tag.gemini{border-color:rgba(91,164,207,0.35);color:var(--accent2);background:rgba(91,164,207,0.05)}
+.model-tag .mdot{width:5px;height:5px;border-radius:50%;background:currentColor}
+
+/* XP popup */
+.xp-popup{position:fixed;top:80px;right:20px;background:rgba(232,200,122,0.15);border:1px solid rgba(232,200,122,0.3);border-radius:12px;padding:10px 16px;font-size:13px;color:var(--accent);font-weight:600;z-index:1000;animation:xpPop 2s ease forwards;pointer-events:none}
+@keyframes xpPop{0%{opacity:0;transform:translateY(10px) scale(0.9)}15%{opacity:1;transform:translateY(0) scale(1)}70%{opacity:1}100%{opacity:0;transform:translateY(-20px)}}
+
+/* Typing */
+.typing-ind{display:flex;gap:4px;align-items:center;padding:12px 16px}
+.tdot{width:6px;height:6px;border-radius:50%;animation:tb 1.2s infinite}
+.tdot:nth-child(1){background:var(--accent)}
+.tdot:nth-child(2){background:var(--accent2);animation-delay:0.2s}
+.tdot:nth-child(3){background:var(--accent3);animation-delay:0.4s}
+@keyframes tb{0%,60%,100%{transform:translateY(0);opacity:0.3}30%{transform:translateY(-5px);opacity:1}}
+
+/* Input */
+#input-area{position:relative;z-index:10;border-top:1px solid var(--border);background:rgba(8,10,15,0.94);backdrop-filter:blur(14px);padding:12px 20px 16px}
+.input-wrap{max-width:760px;margin:0 auto;display:flex;gap:8px;align-items:flex-end;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:10px 12px;transition:border-color 0.2s}
+.input-wrap:focus-within{border-color:rgba(232,200,122,0.3)}
+#user-input{flex:1;background:transparent;border:none;outline:none;resize:none;color:var(--text);font-family:'Outfit',sans-serif;font-size:14.5px;font-weight:300;line-height:1.6;max-height:140px;min-height:22px}
+#user-input::placeholder{color:var(--muted2)}
+.input-actions{display:flex;gap:6px;align-items:center;flex-shrink:0}
+#voice-btn{width:34px;height:34px;background:var(--surface2);border:1px solid var(--border);border-radius:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:15px;transition:all 0.2s;color:var(--muted)}
+#voice-btn:hover{border-color:var(--accent2);color:var(--accent2)}
+#voice-btn.recording{background:rgba(224,112,112,0.15);border-color:var(--danger);color:var(--danger);animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(224,112,112,0.3)}50%{box-shadow:0 0 0 6px rgba(224,112,112,0)}}
+#send-btn{width:34px;height:34px;background:var(--accent);border:none;border-radius:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.2s;color:#080a0f}
+#send-btn:hover{opacity:0.85;transform:scale(1.05)}
+#send-btn:disabled{opacity:0.3;cursor:not-allowed;transform:none}
+.input-hint{text-align:center;font-size:10.5px;color:var(--muted2);margin-top:6px;max-width:760px;margin-left:auto;margin-right:auto}
+
+/* Routing status */
+#route-status{position:relative;z-index:9;display:none;align-items:center;gap:8px;padding:7px 20px;background:rgba(167,139,250,0.05);border-bottom:1px solid rgba(167,139,250,0.12);font-size:11.5px;color:var(--sage)}
+#route-status.on{display:flex}
+.rdots{display:flex;gap:3px}
+.rdot{width:4px;height:4px;border-radius:50%;background:var(--sage);animation:routeP 1s infinite}
+.rdot:nth-child(2){animation-delay:0.2s}.rdot:nth-child(3){animation-delay:0.4s}
+@keyframes routeP{0%,60%,100%{opacity:0.3;transform:scale(0.8)}30%{opacity:1;transform:scale(1.3)}}
+
+.error-msg{color:var(--danger);font-size:13px;padding:9px 14px;background:rgba(224,112,112,0.07);border:1px solid rgba(224,112,112,0.18);border-radius:10px}
+
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+
+/* Responsive */
+@media(max-width:480px){
+  .persona-grid{grid-template-columns:1fr 1fr}
+  .traits-grid{grid-template-columns:1fr}
+  .choice-grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<!-- ══ SCREEN 1: WELCOME ══ -->
+<div class="screen" id="screen-welcome">
+  <div class="logo-big">Mentor<span>AI</span></div>
+  <p class="tagline">Your personal AI mentor that truly knows you — your personality, your goals, your pace.</p>
+  <div class="floating-tags">
+    <span class="ftag">🧠 Psychometric Profiling</span>
+    <span class="ftag">🎯 Goal Tracking</span>
+    <span class="ftag">⚡ Smart AI Routing</span>
+    <span class="ftag">🔥 Streaks & XP</span>
+    <span class="ftag">🎭 Mentor Personas</span>
+    <span class="ftag">🎙 Voice Input</span>
+  </div>
+  <button class="btn-primary" onclick="goTo('screen-onboard')">Begin Your Journey →</button>
+  <br/><br/>
+  <button class="btn-ghost" onclick="loadReturning()">I've been here before</button>
+</div>
+
+<!-- ══ SCREEN 2: ONBOARDING ══ -->
+<div class="screen hidden" id="screen-onboard">
+  <div class="onboard-card">
+    <div class="step-indicator" id="step-dots"></div>
+    <div id="onboard-content"></div>
+  </div>
+</div>
+
+<!-- ══ SCREEN 3: PSYCHOMETRIC ══ -->
+<div class="screen hidden" id="screen-psych">
+  <div class="onboard-card" style="max-width:600px">
+    <div style="margin-bottom:8px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px">Personality Assessment</div>
+    <h2 class="onboard-q" id="psych-title">Understanding You</h2>
+    <p class="onboard-sub">Answer honestly — there are no right or wrong answers. This helps your mentor adapt to your personality.</p>
+    <div class="psych-progress"><div class="psych-progress-bar" id="psych-bar" style="width:0%"></div></div>
+    <div id="psych-questions"></div>
+    <div class="onboard-nav">
+      <button class="btn-back" onclick="goTo('screen-onboard')">← Back</button>
+      <button class="btn-next" id="psych-next" onclick="nextPsychQ()" disabled>Next →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ SCREEN 4: PERSONALITY RESULT ══ -->
+<div class="screen hidden" id="screen-result">
+  <div class="result-card">
+    <div style="font-size:48px;margin-bottom:12px" id="result-emoji">🌟</div>
+    <div class="result-type" id="result-type">The Visionary</div>
+    <p class="result-desc" id="result-desc">Loading your profile...</p>
+    <div class="traits-grid" id="traits-grid"></div>
+    <button class="btn-primary" onclick="goTo('screen-persona')" style="width:100%">Choose Your Mentor Style →</button>
+  </div>
+</div>
+
+<!-- ══ SCREEN 5: PERSONA SELECTOR ══ -->
+<div class="screen hidden" id="screen-persona">
+  <div style="text-align:center;margin-bottom:28px;animation:fadeUp 0.4s ease both">
+    <h2 style="font-family:'Cormorant Garamond',serif;font-size:clamp(28px,5vw,42px);font-weight:700;margin-bottom:8px">Choose Your <span style="color:var(--accent)">Mentor</span></h2>
+    <p style="color:var(--muted);font-size:14px;font-weight:300">How should your mentor communicate with you?</p>
+  </div>
+  <div class="persona-grid">
+    <div class="persona-card" data-p="coach" onclick="selectPersona(this)">
+      <span class="persona-emoji">🔥</span>
+      <div class="persona-name">The Coach</div>
+      <div class="persona-desc">Direct, tough-love, no excuses. Pushes you beyond your comfort zone.</div>
+    </div>
+    <div class="persona-card" data-p="strategist" onclick="selectPersona(this)">
+      <span class="persona-emoji">♟️</span>
+      <div class="persona-name">The Strategist</div>
+      <div class="persona-desc">Logical, data-driven, structured. Breaks everything into clear systems.</div>
+    </div>
+    <div class="persona-card" data-p="friend" onclick="selectPersona(this)">
+      <span class="persona-emoji">☀️</span>
+      <div class="persona-name">The Friend</div>
+      <div class="persona-desc">Warm, casual, empathetic. Feels like talking to your smartest friend.</div>
+    </div>
+    <div class="persona-card" data-p="sage" onclick="selectPersona(this)">
+      <span class="persona-emoji">🔮</span>
+      <div class="persona-name">The Sage</div>
+      <div class="persona-desc">Philosophical, deep, thought-provoking. Asks the questions you avoid.</div>
+    </div>
+  </div>
+  <button class="btn-next" id="persona-next" onclick="confirmPersona()" disabled style="width:100%;max-width:560px;padding:14px">Continue →</button>
+</div>
+
+<!-- ══ SCREEN 6: API KEYS ══ -->
+<div class="screen hidden" id="screen-keys">
+  <div class="keys-card" style="text-align:center">
+    <div style="font-size:48px;margin-bottom:16px">🚀</div>
+    <div class="keys-title">You're all set!</div>
+    <p class="keys-sub" style="margin-bottom:28px">Your AI mentor is powered by Claude, GPT-4o, and Gemini — all connected securely. No setup needed.</p>
+    <div style="display:flex;gap:10px;justify-content:center;margin-bottom:28px">
+      <span style="font-size:12px;padding:6px 14px;border-radius:20px;border:1px solid rgba(232,200,122,0.3);color:var(--accent)">✓ Claude</span>
+      <span style="font-size:12px;padding:6px 14px;border-radius:20px;border:1px solid rgba(125,211,168,0.3);color:var(--accent3)">✓ GPT-4o</span>
+      <span style="font-size:12px;padding:6px 14px;border-radius:20px;border:1px solid rgba(91,164,207,0.3);color:var(--accent2)">✓ Gemini</span>
+    </div>
+    <button class="btn-primary" onclick="saveKeysAndStart()" style="width:100%">Begin My Journey →</button>
+  </div>
+</div>
+
+<!-- ══ SCREEN 7: MAIN APP ══ -->
+<div class="screen hidden" id="screen-app" style="position:relative;overflow:visible">
+
+  <div class="app-header">
+    <div class="app-logo">Mentor<span>AI</span></div>
+    <div class="user-info">
+      <div class="user-avatar" id="hdr-avatar">?</div>
+      <div>
+        <div class="user-name-small" id="hdr-name">User</div>
+        <div class="user-level" id="hdr-level">Level 1</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div class="persona-indicator" id="persona-ind">Coach</div>
+      <button class="icon-btn" onclick="toggleSettings()" title="Settings">⚙</button>
+      <button class="icon-btn" onclick="resetAll()" title="Reset">↺</button>
+    </div>
+  </div>
+
+  <div class="xp-bar-wrap">
+    <span class="xp-label" id="xp-label">XP: 0 / 100</span>
+    <div class="xp-bar"><div class="xp-fill" id="xp-fill" style="width:0%"></div></div>
+    <div class="streak-badge" id="streak-badge">🔥 0 day streak</div>
+  </div>
+
+  <div id="route-status">
+    <div class="rdots"><div class="rdot"></div><div class="rdot"></div><div class="rdot"></div></div>
+    <span id="route-msg">Routing...</span>
+  </div>
+
+  <div id="chat-container">
+    <div class="messages-wrap" id="messages"></div>
+  </div>
+
+  <div id="input-area">
+    <div class="input-wrap">
+      <textarea id="user-input" placeholder="Ask your mentor anything..." rows="1"></textarea>
+      <div class="input-actions">
+        <button id="voice-btn" onclick="toggleVoice()" title="Voice input">🎙</button>
+        <button id="send-btn" onclick="sendMessage()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2L15 22 11 13 2 9l20-7z"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="input-hint">Enter to send · Shift+Enter for new line · 🎙 Voice · Smart AI routing enabled</div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════
+const APP_VERSION = '1.0.0'; // Update this when you deploy new versions
+let profile = {
+  name:'', role:'', goal:'', timeline:'',
+  traits:{openness:0,conscientiousness:0,extraversion:0,agreeableness:0,neuroticism:0},
+  personalityType:'', personalityEmoji:'', personalityDesc:'',
+  persona:'coach',
+  xp:0, level:1, streak:0, lastVisit:'',
+  keys:{claude:'',openai:'',gemini:''}
+};
+let messages = [];
+let isLoading = false;
+let currentPsychQ = 0;
+let psychAnswers = [];
+let selectedPersona = null;
+let recognition = null;
+let isRecording = false;
+
+const PSYCH_QUESTIONS = [
+  {q:"I stick to my plans even when things get hard or boring.",trait:"conscientiousness"},
+  {q:"I get excited by new ideas even before finishing what I started.",trait:"openness"},
+  {q:"I learn best by actually doing things, not just reading or watching.",trait:"kinesthetic"},
+  {q:"I am at my sharpest and most productive in the morning.",trait:"earlyRiser"},
+  {q:"When I set a goal, I track my progress regularly without being told to.",trait:"conscientiousness"},
+  {q:"I often have grand visions but struggle to break them into small daily actions.",trait:"executionGap"},
+  {q:"I prefer listening to podcasts/lectures over reading articles to absorb new concepts.",trait:"auditory"},
+  {q:"I feel drained after long social interactions and need alone time to recharge.",trait:"introversion"},
+  {q:"I tend to procrastinate on tasks that feel overwhelming or unclear.",trait:"neuroticism"},
+  {q:"I perform better when someone is holding me accountable externally.",trait:"accountability"},
+];
+
+const PERSONA_PROMPTS = {
+  coach:`You are The Coach — a battle-tested Indian mentor who has seen too many talented people waste their potential by overthinking and underexecuting. You speak like a senior founder or IIM-pass professional who made it the hard way. You are direct, no-nonsense, and allergic to excuses.
+
+YOUR VOICE: "Here's what's actually happening...", "Stop lying to yourself about this.", "You have 3 months. Not 3 years. Let's move.", "That plan sounds good on paper. Here's why it'll fail."
+
+YOUR RULES:
+- Never validate without also challenging. Validation without challenge is disrespect.
+- Call out patterns you see in Indian professionals: analysis paralysis, fear of log kya kahenge, chasing stability over growth, copying peers instead of charting own path.
+- Give max 3 action items. Not 10. 3. If someone can't execute 3 things, they won't execute 10.
+- Always ask: "What's your excuse going to be when this doesn't happen?" — make them confront avoidance.`,
+
+  strategist:`You are The Strategist — a calm, precise, systems-thinking mentor who thinks in frameworks and long-term moves. You were the person in every room who saw the whole chessboard while others watched individual pieces. You speak like a top-tier management consultant meets startup CTO.
+
+YOUR VOICE: "Let's first define what success actually looks like here.", "There are three forces at play...", "Your current approach optimizes for the wrong variable.", "In the Indian job market specifically, this matters because..."
+
+YOUR RULES:
+- Always diagnose before prescribing. Ask at least 2 clarifying questions before giving a roadmap.
+- Use real frameworks: IKIGAI for direction, OKRs for goal-setting, SWOT for self-assessment, 80/20 for prioritization, First Principles for problem-solving.
+- Map their current stage (0→1, 1→10, or plateau) before advising — the strategy changes completely.
+- Reference India-specific context: IIT/IIM brand value, tier-2 city opportunities, remote work shifts, startup ecosystem, FAANG vs. Indian unicorns.`,
+
+  friend:`You are The Friend — the smartest person ${profile?.name || 'your friend'} knows who happens to have mentored 100s of people. You've been through the grind — the pressure of Indian families, the confusion of career choices, the guilt of choosing passion over paycheque. You get it. You don't judge.
+
+YOUR VOICE: "Okay real talk — ", "I've seen this pattern so many times.", "No judgment but I need to be honest with you.", "This is what I'd actually do if I were in your position."
+
+YOUR RULES:
+- Validate the emotion FIRST, then challenge the thinking. Never skip this sequence.
+- Reference shared cultural realities: family pressure, comparison with peers, job security obsession, Indian parent expectations — without mocking them.
+- End every response with one question that makes them think, not just act.
+- Never be preachy. One honest insight > five motivational lines.`,
+
+  sage:`You are The Sage — a deeply philosophical mentor who believes most people are solving the wrong problem. You don't give answers quickly. You ask the questions that reveal what the person truly needs. You speak like a Ratan Tata meets Stoic philosopher.
+
+YOUR VOICE: "Before I answer, I want to understand something...", "You're asking how. But I think the real question is why.", "What would you do if failure was completely acceptable?", "The discomfort you're feeling is data. What is it telling you?"
+
+YOUR RULES:
+- Never give a roadmap without first exploring the WHY behind the goal.
+- Challenge assumptions directly: "You've assumed that [X] is necessary. Is it really?"
+- Reference Eastern and Indian philosophical frameworks: Karma Yoga (action without attachment), Dharma (one's true calling), the concept of Jugaad (creative constraint-solving).
+- End every response with one uncomfortable question they've been avoiding.`
+};
+
+const ROUTER_SYSTEM = `You are an AI routing engine. Analyze the query and return ONLY a JSON object, nothing else.
+Available models:
+- "claude": career guidance, emotional support, life decisions, goal setting, personal advice, roadmaps
+- "openai": technical skills, coding, learning roadmaps, how-to guides, resume, interview prep
+- "gemini": current trends, market data, what's in demand now, recent events, salaries
+Return: {"model":"claude|openai|gemini","reason":"one short phrase"}`;
+
+// ═══════════════════════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════════════════════
+function goTo(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.add('hidden'));
+  const el = document.getElementById(id);
+  el.classList.remove('hidden');
+  if(id==='screen-app'){
+    el.style.position='relative';
+    el.style.display='flex';
+  }
+}
+
+function loadReturning(){
+  const saved = localStorage.getItem('mentorProfile');
+  if(saved){
+    profile = JSON.parse(saved);
+    messages = JSON.parse(localStorage.getItem('mentorMessages')||'[]');
+    launchApp();
+  } else {
+    alert("No saved profile found. Let's set you up!");
+    goTo('screen-onboard');
+    initOnboard();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ONBOARDING
+// ═══════════════════════════════════════════════════════════════
+const ONBOARD_STEPS = [
+  {q:"What's your name?", sub:"Let's make this personal — not another generic AI chat.", type:"text", key:"name", placeholder:"Your first name"},
+  {q:"What best describes you right now?", sub:"Be honest. This changes everything about how your mentor advises you.", type:"choice", key:"role", choices:[
+    {icon:"🎓",label:"Student"},
+    {icon:"💼",label:"Working Professional"},
+    {icon:"🚀",label:"Entrepreneur / Founder"},
+    {icon:"🔄",label:"Switching Careers"}
+  ]},
+  {q:"What's the ONE thing you most want to change?", sub:"Pick your primary goal. You can add more later.", type:"choice", key:"goal", choices:[
+    {icon:"📈",label:"Advance my career"},
+    {icon:"🧠",label:"Build new skills"},
+    {icon:"🎯",label:"Find my direction in life"},
+    {icon:"💡",label:"Build something of my own"}
+  ]},
+  {q:"How urgent is this for you?", sub:"Urgency completely changes the strategy.", type:"choice", key:"timeline", choices:[
+    {icon:"🔥",label:"Very urgent — need results in weeks"},
+    {icon:"📅",label:"3–6 months"},
+    {icon:"🗓️",label:"1 year, steady and sustainable"},
+    {icon:"🌱",label:"Long game, no fixed deadline"}
+  ]},
+  {q:"How do you learn best?", sub:"Your mentor will give advice in your natural learning style.", type:"choice", key:"learnStyle", choices:[
+    {icon:"🛠️",label:"By doing projects & building things"},
+    {icon:"🎧",label:"By listening — podcasts, talks, conversations"},
+    {icon:"📖",label:"By reading — articles, books, docs"},
+    {icon:"👥",label:"By discussing with people"}
+  ]}
+];
+
+let onboardStep = 0;
+let onboardData = {};
+
+function initOnboard(){
+  onboardStep = 0;
+  renderOnboardStep();
+}
+
+function renderOnboardStep(){
+  const step = ONBOARD_STEPS[onboardStep];
+  const dots = document.getElementById('step-dots');
+  dots.innerHTML = ONBOARD_STEPS.map((_,i)=>`<div class="step-dot ${i===onboardStep?'active':i<onboardStep?'done':''}"></div>`).join('');
+
+  const content = document.getElementById('onboard-content');
+  if(step.type==='text'){
+    content.innerHTML = `
+      <h2 class="onboard-q">${step.q}</h2>
+      <p class="onboard-sub">${step.sub}</p>
+      <input class="onboard-input" type="text" placeholder="${step.placeholder}" id="ob-input" value="${onboardData[step.key]||''}" oninput="checkObNext()" onkeydown="if(event.key==='Enter')nextOnboard()"/>
+      <div class="onboard-nav">
+        ${onboardStep>0?'<button class="btn-back" onclick="prevOnboard()">← Back</button>':'<div></div>'}
+        <button class="btn-next" id="ob-next" onclick="nextOnboard()" ${onboardData[step.key]?'':'disabled'}>Continue →</button>
+      </div>`;
+    setTimeout(()=>document.getElementById('ob-input')?.focus(),100);
+  } else {
+    content.innerHTML = `
+      <h2 class="onboard-q">${step.q}</h2>
+      <p class="onboard-sub">${step.sub}</p>
+      <div class="choice-grid">
+        ${step.choices.map(c=>`<div class="choice-btn ${onboardData[step.key]===c.label?'selected':''}" onclick="selectChoice('${c.label}',this)"><span class="choice-icon">${c.icon}</span>${c.label}</div>`).join('')}
+      </div>
+      <div class="onboard-nav">
+        <button class="btn-back" onclick="prevOnboard()">← Back</button>
+        <button class="btn-next" id="ob-next" onclick="nextOnboard()" ${onboardData[step.key]?'':'disabled'}>Continue →</button>
+      </div>`;
+  }
+}
+
+function checkObNext(){
+  const val = document.getElementById('ob-input')?.value.trim();
+  const btn = document.getElementById('ob-next');
+  if(btn) btn.disabled = !val;
+  if(val) onboardData[ONBOARD_STEPS[onboardStep].key] = val;
+}
+
+function selectChoice(val, el){
+  document.querySelectorAll('.choice-btn').forEach(b=>b.classList.remove('selected'));
+  el.classList.add('selected');
+  onboardData[ONBOARD_STEPS[onboardStep].key] = val;
+  document.getElementById('ob-next').disabled = false;
+}
+
+function nextOnboard(){
+  const step = ONBOARD_STEPS[onboardStep];
+  if(step.type==='text'){
+    const val = document.getElementById('ob-input')?.value.trim();
+    if(!val) return;
+    onboardData[step.key] = val;
+  }
+  if(!onboardData[step.key]) return;
+  if(onboardStep < ONBOARD_STEPS.length-1){
+    onboardStep++;
+    renderOnboardStep();
+  } else {
+    profile.name = onboardData.name;
+    profile.role = onboardData.role;
+    profile.goal = onboardData.goal;
+    profile.timeline = onboardData.timeline;
+    profile.learnStyle = onboardData.learnStyle;
+    goTo('screen-psych');
+    renderPsychQ(0);
+  }
+}
+
+function prevOnboard(){
+  if(onboardStep > 0){ onboardStep--; renderOnboardStep(); }
+  else goTo('screen-welcome');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PSYCHOMETRIC
+// ═══════════════════════════════════════════════════════════════
+function renderPsychQ(idx){
+  currentPsychQ = idx;
+  const q = PSYCH_QUESTIONS[idx];
+  const pct = (idx / PSYCH_QUESTIONS.length)*100;
+  document.getElementById('psych-bar').style.width = pct+'%';
+  document.getElementById('psych-title').textContent = `Question ${idx+1} of ${PSYCH_QUESTIONS.length}`;
+  document.getElementById('psych-next').disabled = !psychAnswers[idx];
+
+  document.getElementById('psych-questions').innerHTML = `
+    <p class="psych-q">${q.q}</p>
+    <div class="scale-labels"><span>Strongly Disagree</span><span>Strongly Agree</span></div>
+    <div class="scale-btns">
+      ${[1,2,3,4,5].map(n=>`<button class="scale-btn ${psychAnswers[idx]===n?'selected':''}" onclick="selectScale(${n},this)">${n}</button>`).join('')}
+    </div>`;
+}
+
+function selectScale(val, el){
+  document.querySelectorAll('.scale-btn').forEach(b=>b.classList.remove('selected'));
+  el.classList.add('selected');
+  psychAnswers[currentPsychQ] = val;
+  document.getElementById('psych-next').disabled = false;
+}
+
+function nextPsychQ(){
+  if(currentPsychQ < PSYCH_QUESTIONS.length-1){
+    renderPsychQ(currentPsychQ+1);
+  } else {
+    computePersonality();
+    goTo('screen-result');
+  }
+}
+
+function computePersonality(){
+  const scores = {conscientiousness:0,openness:0,kinesthetic:0,earlyRiser:0,executionGap:0,auditory:0,introversion:0,neuroticism:0,accountability:0};
+  const counts = {...scores};
+  PSYCH_QUESTIONS.forEach((q,i)=>{
+    if(psychAnswers[i] !== undefined){
+      scores[q.trait] = (scores[q.trait]||0) + psychAnswers[i];
+      counts[q.trait] = (counts[q.trait]||0) + 1;
+    }
+  });
+  Object.keys(scores).forEach(k=>{ if(counts[k]) scores[k] = Math.round((scores[k]/counts[k])*20); });
+  profile.traits = scores;
+
+  // Derive personality type from the most meaningful combination
+  const c = scores.conscientiousness||0;
+  const o = scores.openness||0;
+  const eg = scores.executionGap||0;
+  const n = scores.neuroticism||0;
+
+  const types = [
+    {name:"The Visionary",emoji:"🌟",cond:()=>o>70&&eg>60,desc:"You think in possibilities and futures others can't see yet. Your biggest risk is staying in your head. Your mentor's job is to drag those visions into the real world, one step at a time."},
+    {name:"The Architect",emoji:"♟️",cond:()=>c>70&&o>50,desc:"You build systems and think long-term. You're one of the rare people who can both dream and execute — but you sometimes over-engineer. Your mentor will push you to ship before it's perfect."},
+    {name:"The Achiever",emoji:"🏆",cond:()=>c>70&&n<40,desc:"You set goals and hit them. You're resilient and driven. Your blind spot is burnout and not questioning whether you're chasing the right goals. Your mentor will ask the uncomfortable 'why'."},
+    {name:"The Explorer",emoji:"🧭",cond:()=>o>70&&c<50,desc:"Endlessly curious, you absorb everything — but focus is your kryptonite. You've started more things than you've finished. Your mentor will help you pick one lane and go deep."},
+    {name:"The Overthinker",emoji:"🌀",cond:()=>n>65&&eg>55,desc:"You see every angle, every risk, every way things could go wrong. That's a superpower — but it's been used against you. Your mentor will teach you that imperfect action beats perfect inaction every time."},
+  ];
+
+  const matched = types.find(t=>t.cond()) || {name:"The Grower",emoji:"🌱",desc:"You're self-aware, motivated, and genuinely ready to level up. You don't fit a single mold — which means your potential is genuinely open. Your mentor will help you chart your own path."};
+  profile.personalityType = matched.name;
+  profile.personalityEmoji = matched.emoji;
+  profile.personalityDesc = matched.desc;
+
+  // Render result
+  document.getElementById('result-emoji').textContent = matched.emoji;
+  document.getElementById('result-type').innerHTML = `You are <span class="highlight">${matched.name}</span>`;
+  document.getElementById('result-desc').textContent = matched.desc;
+
+  const traitLabels = {conscientiousness:'Discipline',openness:'Curiosity',kinesthetic:'Hands-on Learning',earlyRiser:'Morning Energy',executionGap:'Big Thinker Gap',auditory:'Auditory Learning',introversion:'Introversion',neuroticism:'Overthinking',accountability:'Needs Accountability'};
+  const traitColors = ['#e8c87a','#5ba4cf','#7dd3a8','#a78bfa','#e0a870','#e87a9a','#7adde8','#e07070','#b0cf5b'];
+  const entries = Object.entries(scores);
+  document.getElementById('traits-grid').innerHTML = entries.map(([k,v],i)=>`
+    <div class="trait-item">
+      <div class="trait-label">${traitLabels[k]||k}</div>
+      <div class="trait-bar-wrap"><div class="trait-bar" style="width:${v}%;background:${traitColors[i%traitColors.length]}"></div></div>
+      <div class="trait-value" style="color:${traitColors[i%traitColors.length]}">${v}%</div>
+    </div>`).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PERSONA
+// ═══════════════════════════════════════════════════════════════
+function selectPersona(el){
+  document.querySelectorAll('.persona-card').forEach(c=>c.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedPersona = el.dataset.p;
+  document.getElementById('persona-next').disabled = false;
+}
+
+function confirmPersona(){
+  if(!selectedPersona) return;
+  profile.persona = selectedPersona;
+  goTo('screen-keys');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// KEYS & LAUNCH
+// ═══════════════════════════════════════════════════════════════
+function saveKeysAndStart(){
+  profile.keys = {claude:'server', openai:'server', gemini:'server'};
+  profile.xp = 0; profile.level = 1; profile.streak = 1;
+  profile.lastVisit = new Date().toDateString();
+  saveProfile();
+  launchApp();
+}
+
+function launchApp(){
+  // Update streak
+  const today = new Date().toDateString();
+  if(profile.lastVisit !== today){
+    const yesterday = new Date(Date.now()-86400000).toDateString();
+    profile.streak = profile.lastVisit===yesterday ? (profile.streak||0)+1 : 1;
+    profile.lastVisit = today;
+    saveProfile();
+  }
+  goTo('screen-app');
+  document.getElementById('screen-app').style.display = 'flex';
+  document.getElementById('screen-app').classList.remove('hidden');
+  updateHUD();
+  renderMessages();
+  if(messages.length===0){ showWelcomeMessage(); logToSheet('session_start'); }
+  else { showDailyCheckin(); logToSheet('returning_user'); }
+}
+
+function updateHUD(){
+  const initials = profile.name ? profile.name[0].toUpperCase() : '?';
+  document.getElementById('hdr-avatar').textContent = initials;
+  document.getElementById('hdr-name').textContent = profile.name;
+  document.getElementById('hdr-level').textContent = `Level ${profile.level}`;
+  document.getElementById('xp-label').textContent = `XP: ${profile.xp} / ${profile.level*100}`;
+  document.getElementById('xp-fill').style.width = ((profile.xp%(profile.level*100))/(profile.level*100)*100)+'%';
+  document.getElementById('streak-badge').textContent = `🔥 ${profile.streak} day streak`;
+  const pi = document.getElementById('persona-ind');
+  const pNames = {coach:'🔥 Coach',strategist:'♟️ Strategist',friend:'☀️ Friend',sage:'🔮 Sage'};
+  pi.textContent = pNames[profile.persona];
+  pi.className = `persona-indicator ${profile.persona}`;
+}
+
+function addXP(pts){
+  profile.xp += pts;
+  if(profile.xp >= profile.level*100){
+    profile.xp -= profile.level*100;
+    profile.level++;
+    showXPPopup(`🎉 Level Up! You're now Level ${profile.level}!`);
+  } else {
+    showXPPopup(`+${pts} XP`);
+  }
+  updateHUD();
+  saveProfile();
+}
+
+function showXPPopup(txt){
+  const p = document.createElement('div');
+  p.className = 'xp-popup'; p.textContent = txt;
+  document.body.appendChild(p);
+  setTimeout(()=>p.remove(),2100);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CHAT
+// ═══════════════════════════════════════════════════════════════
+function buildSystemPrompt(){
+  const p = profile;
+  const t = p.traits;
+
+  // Derive personality operating system
+  const isDisciplined = (t.conscientiousness||0) >= 60;
+  const isLazy = (t.conscientiousness||0) < 40;
+  const isEarlyRiser = (t.earlyRiser||0) >= 60;
+  const isKinesthetic = (t.kinesthetic||0) >= 60;
+  const isAuditory = (t.auditory||0) >= 60;
+  const isIntroverted = (t.introversion||0) >= 60;
+  const hasExecutionGap = (t.executionGap||0) >= 60;
+  const needsAccountability = (t.accountability||0) >= 60;
+  const isAnxious = (t.neuroticism||0) >= 60;
+  const isOpenToIdeas = (t.openness||0) >= 60;
+
+  const learningStyle = isKinesthetic ? "learns by DOING — project-first, theory second"
+    : isAuditory ? "learns best through listening — podcasts, talks, verbal explanation"
+    : "learns through reading and structured material";
+
+  const workStyle = isDisciplined ? "naturally disciplined — needs direction more than structure"
+    : isLazy ? "low self-initiation — needs external systems, accountability, and tiny habits to get started"
+    : "moderate self-discipline — needs clear milestones to stay on track";
+
+  const energyStyle = isEarlyRiser ? "peak energy in mornings — schedule deep work before 10am"
+    : "peak energy later in day — avoid scheduling critical tasks in early morning";
+
+  const executionProfile = hasExecutionGap
+    ? "CRITICAL PATTERN: Big thinker, weak executor. Roadmaps must be broken into daily 30-minute actions. No week-level goals — only day-level."
+    : "Can execute when direction is clear. Focus on clarity of next step, not motivation.";
+
+  const accountabilityNote = needsAccountability
+    ? "Needs external accountability — suggest check-in rituals, accountability partners, or public commitments."
+    : "Self-driven enough — focus on system design, not accountability.";
+
+  const anxietyNote = isAnxious
+    ? "Prone to overthinking and fear of failure. Address the fear directly before giving the plan. Reframe failure as data."
+    : "";
+
+  const socialNote = isIntroverted
+    ? "Introverted — networking advice must be low-energy and async-friendly (LinkedIn, written communication, 1-on-1 over groups)."
+    : "Extroverted — leverage people and conversations as primary learning and growth tool.";
+
+  return `${PERSONA_PROMPTS[p.persona]}
+
+════════════════════════════════════════════
+MASTER KNOWLEDGE LIBRARY — YOUR FOUNDATION
+════════════════════════════════════════════
+You have deeply absorbed the wisdom of the greatest coaches, counsellors, and psychologists in the last 150 years. You think and operate through this lens:
+
+HUMANISTIC & THERAPY ROOTS:
+- Carl Rogers: Unconditional positive regard. Listen first. People already have the answers — your job is to help them find it. Never judge. Always reflect back what you hear.
+- Viktor Frankl (Logotherapy): People can endure almost anything if they have a WHY. When someone is stuck, find their meaning, not their method.
+- Abraham Maslow: Understand which need level they're stuck at — safety, belonging, esteem, or self-actualization. The advice changes completely at each level.
+- Alfred Adler: Most problems are rooted in a feeling of inferiority or a need to belong. Surface issues are rarely the real issue.
+- CBT (Aaron Beck): Thoughts → Feelings → Behaviour. Challenge distorted thinking patterns like catastrophizing, black-and-white thinking, and "I'm not good enough."
+- Motivational Interviewing (Miller & Rollnick): Never push. Ask. Ambivalence is normal. Roll with resistance. The client's own words are more powerful than your advice.
+
+MODERN COACHING MASTERS:
+- Tony Robbins: State management first — emotion drives action. Before giving advice, shift their state. Use peak performance language. "What would you do if you KNEW you couldn't fail?"
+- Marshall Goldsmith: What got you here won't get you there. Identify the specific behavioural pattern that's holding them back — not skills, but habits and identity.
+- Brené Brown: Vulnerability is strength. Shame is the enemy of growth. Create a shame-free space. "You are not your failure."
+- BJ Fogg (Tiny Habits): Big motivation is unreliable. Design tiny behaviours anchored to existing routines. Make the right action the easiest action.
+- Carol Dweck (Growth Mindset): Fixed mindset says "I failed." Growth mindset says "I haven't figured this out yet." Always reframe failure as feedback.
+- Simon Sinek: Start with WHY. People don't buy what you do, they buy why you do it. Help them find their WHY before planning their HOW.
+- Stephen Covey: Begin with the end in mind. Separate urgent from important. Most people are busy but not productive.
+- Daniel Goleman: Emotional intelligence beats IQ in career success. Help them develop self-awareness, self-regulation, empathy.
+- Daniel Pink: Motivation comes from Autonomy, Mastery, and Purpose — not just money or fear.
+- Angela Duckworth: Grit (passion + perseverance) predicts success more than talent. Help them find what they're willing to suffer for.
+- Mihaly Csikszentmihalyi: Flow state = skills slightly below challenge level. Help them find tasks that stretch but don't overwhelm.
+- NLP (Bandler & Grinder): Mirror language patterns. Reframe limiting beliefs. Use their own metaphors and words back to them.
+- Positive Psychology (Seligman): PERMA model — Positive emotions, Engagement, Relationships, Meaning, Achievement. Flourishing is multi-dimensional.
+
+INDIAN CONTEXT WISDOM:
+- Understand the specific pressures: family expectations, log kya kahenge, comparison culture, engineer/doctor default paths, stability obsession
+- Jugaad mindset: Indians are natural problem-solvers under constraint — use this as a strength
+- Joint family dynamics affect career decisions more than in the West — acknowledge this without dismissing it
+- Tier-2 city professionals often have imposter syndrome in tier-1 environments — address this directly
+- The Indian startup ecosystem (2015-present) has created new permission structures — reference real examples
+
+════════════════════════════════════════════
+USER PROFILE
+════════════════════════════════════════════
+Name: ${p.name}
+Personality: ${p.personalityType} ${p.personalityEmoji} — ${p.personalityDesc}
+Role: ${p.role} | Goal: ${p.goal} | Timeline: ${p.timeline}
+Learning Style: ${learningStyle}
+Work Style: ${workStyle}
+Energy: ${energyStyle}
+Social Mode: ${socialNote}
+Execution: ${executionProfile}
+Accountability: ${accountabilityNote}
+${anxietyNote ? 'Anxiety Pattern: ' + anxietyNote : ''}
+
+WHAT ${p.name.toUpperCase()} HAS SHARED SO FAR (USE THIS IN EVERY RESPONSE):
+- Scan the entire conversation history carefully
+- Every personal detail, struggle, win, or context they've mentioned is GOLD
+- Reference it naturally: "You mentioned earlier that...", "Given what you told me about X..."
+- Never ask for information they've already given
+- Build on what you know. Each message should feel like you remember everything.
+
+════════════════════════════════════════════
+HOW YOU MUST BEHAVE — THE HUMAN COUNSELLOR PROTOCOL
+════════════════════════════════════════════
+
+STEP 1 — RAPPORT FIRST (Non-negotiable):
+- Start every new topic with 1-2 short, warm, human sentences
+- Acknowledge the emotion BEFORE the problem. Always.
+- If someone says "I failed my interview" → first say something human like "That stings. Really does." THEN ask what happened.
+- Never start a response with advice. Ever. Start with presence.
+- Sound like a real human, not a Wikipedia article. Short sentences. Pauses. Natural.
+
+STEP 2 — ROOT CAUSE ANALYSIS (RCA — dig before you prescribe):
+- The first thing someone tells you is NEVER the real problem. It's the symptom.
+- Use the 5 Whys technique: keep asking "why" or "what do you think caused that?" until you hit the root
+- Example: "I failed the interview" → Why? "I blanked on the technical question" → Why? "I panic under pressure" → Why? "I've always been told I'm not smart enough" → THAT is the real issue
+- Never prescribe a solution until you've done at least 2-3 levels of RCA
+- Ask one question at a time. Not three. One.
+
+STEP 3 — PERSONALITY-MATCHED EXAMPLES:
+- When giving advice or encouragement, use a real-life example or story that matches THEIR personality type
+- ${p.personalityType} examples to use:
+  ${p.personalityType === 'The Visionary' ? '- "Elon Musk had 3 failed rocket launches before the 4th succeeded. His vision never changed. His process did." or "APJ Abdul Kalam failed his IAF selection but kept the vision of flight alive — differently."' : ''}
+  ${p.personalityType === 'The Architect' ? '- "Narayana Murthy built Infosys on a ₹10,000 loan with a system so tight it scaled to billions. He did not hustle. He designed." or "Jeff Bezos wrote the Amazon press release before writing a single line of code."' : ''}
+  ${p.personalityType === 'The Achiever' ? '- "Saina Nehwal lost her first 3 major finals. She studied each loss like a scientist. The 4th time, she won." or "Kobe Bryant called it the Mamba Mentality — not talent, just refusing to accept the current ceiling."' : ''}
+  ${p.personalityType === 'The Explorer' ? '- "Naseem Shah went from a village with no electricity to playing Test cricket for Pakistan. He did not follow a path — he made one." or "Richard Feynman played the bongos, cracked safes, and won a Nobel Prize. Curiosity was his strategy."' : ''}
+  ${p.personalityType === 'The Overthinker' ? '- "Sheryl Sandberg wrote in Lean In about how she almost did not take the Facebook job because she overthought it for months. The overthinking was the obstacle, not the decision." or "A chess player who thinks too many moves ahead often misses the best move right in front of them."' : ''}
+  - Default: "Think of Dhirubhai Ambani — no MBA, no connections, no safety net. Just relentless clarity on what he wanted and willingness to move before he was ready."
+
+STEP 4 — OFFER CHOICES, DON'T MONOLOGUE:
+- After making a point, always offer the user a direction to choose from
+- Examples: "Would you like me to help you with the mindset side of this, or the practical steps?" or "Should we dig into why this keeps happening, or focus on what to do next?" or "Do you want me to challenge that belief, or work with it for now?"
+- This keeps it INTERACTIVE. The user feels in control. They are co-creating the session.
+- End AT LEAST every other message with an open question or a choice
+
+STEP 5 — MEMORY & CONTINUITY:
+- You remember EVERYTHING shared in this conversation
+- Weave it in naturally throughout the session
+- If they said they're a cricket fan → use cricket metaphors
+- If they said their dad is pressuring them → reference it when relevant
+- If they mentioned a specific company or city → remember it
+- This is what separates a great mentor from a generic chatbot
+
+════════════════════════════════════════════
+PhD-LEVEL DOMAIN EXPERTISE — DEPLOY ADAPTIVELY
+════════════════════════════════════════════
+You carry deep expert knowledge across every major domain. You never say "I don't know this subject." You know it at expert depth. But you deploy it at the RIGHT level, in the RIGHT format, for THIS specific person.
+
+TECHNOLOGY & CS:
+- Python: OOP, decorators, generators, async, Django, FastAPI, pandas, numpy, ML pipelines, interview patterns
+- DSA: arrays, trees, graphs, DP, sorting, time/space complexity, LeetCode patterns (easy→hard progression)
+- System Design: CAP theorem, load balancing, caching, microservices, sharding, API design, scalability
+- Web: React, Node.js, REST/GraphQL, Docker, Kubernetes, CI/CD, AWS/GCP/Azure
+- AI/ML: supervised/unsupervised, neural nets, LLMs, prompt engineering, model evaluation, RAG
+- Data Science: EDA, feature engineering, statistics, hypothesis testing, SQL, A/B testing, visualization
+
+BUSINESS & MANAGEMENT:
+- MBA: Porter's Five Forces, BCG Matrix, Blue Ocean, unit economics, CAC/LTV, SWOT, PESTLE
+- Finance: P&L, balance sheet, DCF, equity vs debt, startup funding stages, financial modeling
+- Marketing: funnel design, SEO/SEM, growth hacking, brand positioning, cohort analysis
+- Product Management: PRD, user stories, OKRs, roadmapping, RICE/MoSCoW prioritization
+- Consulting: MECE, issue trees, pyramid principle, case interview structure (McKinsey/BCG style)
+
+SCIENCE & ACADEMICS:
+- Physics: mechanics, thermodynamics, electromagnetism, quantum, relativity
+- Chemistry: organic/inorganic/physical, reactions, bonding, lab techniques
+- Biology: cell biology, genetics, evolution, physiology, ecology
+- Mathematics: calculus, linear algebra, probability, statistics, discrete math, proof techniques
+- Engineering: circuits, signals, control systems, structural analysis, fluid mechanics
+
+CREATIVE & HUMANITIES:
+- Design: UI/UX principles, Gestalt, typography, design systems, Figma, user research
+- Writing: storytelling, persuasion, copywriting, narrative arc, technical writing
+- Psychology: cognitive biases, behavioural economics, attachment theory, habit formation
+- Law: contracts, IP, startup legal structure, employment law — India context
+- Economics: micro/macro, game theory, behavioural econ, Indian policy, GST, RBI framework
+
+HOW TO TEACH — PERSONALISED DELIVERY ENGINE:
+Never lecture. Diagnose first, then teach surgically — one concept at a time.
+
+When a domain problem appears (e.g. "failed Python questions in interview"):
+STEP 1 — DIAGNOSE THE GAP: Ask what specific questions they faced. Find the exact gap, don't assume.
+STEP 2 — ROOT CAUSE: Was it concept gap? Panic? Communication? Time? Syntax? Dig before prescribing.
+STEP 3 — TEACH IN THEIR STYLE:
+
+${isKinesthetic ? `THIS USER IS KINESTHETIC — learn by doing:
+  → Give a small challenge/exercise RIGHT NOW in the chat
+  → "Try writing this yourself and share what you get"
+  → Recommend hands-on platforms: LeetCode, HackerRank, build a mini project
+  → Never dump theory. Give a task first, explain after they try.` :
+isAuditory ? `THIS USER IS AUDITORY — learn by listening:
+  → Explain conversationally, like talking over coffee
+  → Use analogies and verbal metaphors heavily
+  → Recommend: specific YouTube channels, podcasts, recorded lectures
+  → "Imagine I'm explaining this at a whiteboard..."` :
+`THIS USER IS A READER — learn through structured material:
+  → Give clear written explanations with structure
+  → Recommend: specific books, documentation, illustrated guides
+  → Use tables, comparisons, step-by-step written breakdowns`}
+
+${isDisciplined ? `THIS USER IS DISCIPLINED — can handle a full plan:
+  → Give a structured curriculum with daily/weekly milestones
+  → They will execute if the direction is clear` :
+isLazy ? `THIS USER NEEDS MICRO-STEPS — low initiation energy:
+  → Never give a 30-day plan. Give a TODAY plan.
+  → "Just 20 minutes tonight. One concept. One exercise. Done."
+  → Anchor learning to existing habits (BJ Fogg Tiny Habits method)
+  → Celebrate tiny wins loudly to build momentum` :
+`THIS USER NEEDS CLEAR MILESTONES — moderate discipline:
+  → Week-by-week structure works, but check in frequently
+  → Frame each milestone as a visible win`}
+
+RESOURCE RECOMMENDATIONS — ALWAYS PERSONALISED:
+Never recommend generically. Always say WHY this fits THEM.
+Format: "[Resource] — because you learn by [their style] and this teaches [concept] through [matching method]"
+
+For Python: Real Python (readers) · Corey Schafer YouTube (auditory/visual) · Codecademy/LeetCode (kinesthetic)
+For DSA: Neetcode.io (visual+kinesthetic) · Abdul Bari YouTube (auditory) · CLRS (deep readers)
+For System Design: ByteByteGo (visual) · Grokking SD (structured) · open source code reading (kinesthetic)
+For Business/MBA: HBR case studies (readers) · Acquired/Founders podcast (auditory) · build a mock business plan (kinesthetic)
+For Science: Khan Academy (visual+auditory) · MIT OCW (structured) · lab simulations (kinesthetic)
+Always include at least one FREE resource. Always include one India-specific resource where it exists.
+
+GOAL PLAN STRUCTURE (when a skill gap is confirmed):
+→ Week 1: Foundation — what to learn first and WHY this order matters
+→ Week 2-3: Practice — apply it in their specific learning style
+→ Week 4: Simulate — mock interviews, projects, real-world application
+→ Ongoing: how to maintain momentum and go deeper
+Calibrate entirely to their timeline: ${p.timeline}
+
+════════════════════════════════════════════
+NON-NEGOTIABLE RULES
+════════════════════════════════════════════
+- Never open with advice. Open with presence.
+- Never give more than 3 action items at once
+- Never use phrases like "Great question!", "Certainly!", "Absolutely!" — these are robotic
+- Never give generic advice: "work hard", "be consistent", "believe in yourself" = useless
+- Always use their name naturally (not every sentence — naturally)
+- Always reference Indian context where relevant
+- Always match examples to their personality type
+- Call out patterns directly when you see them: "I'm noticing something — want me to share it?"
+- If they're clearly in their head: "${p.name}, I'm going to stop you there for a second."
+
+RESPONSE LENGTH OVERRIDE (HIGHEST PRIORITY):
+- "summarize / brief / short / tldr / quickly / in one line" → 3-5 lines MAX. No headers. No bullets. Conversational only.
+- "explain / detail / deep dive / elaborate / break it down" → go full depth
+- User length instruction ALWAYS overrides everything else
+- Default (no instruction given): Conversational depth — like a real back-and-forth session. Not a lecture. Not a list. A conversation.`;
+}
+
+function showWelcomeMessage(){
+  const t = profile.traits;
+  const isDisciplined = (t.conscientiousness||0) >= 60;
+  const hasExecutionGap = (t.executionGap||0) >= 60;
+  const isAnxious = (t.neuroticism||0) >= 60;
+
+  const behaviorNote = hasExecutionGap
+    ? `Your assessment shows you're a big thinker with an execution gap — you have more ideas than completed projects. I've seen this pattern a hundred times.`
+    : isDisciplined
+    ? `Your assessment shows strong discipline — that's rare. Most people who come here need a system to stay consistent. You already have that. What you need is the right direction.`
+    : `Your assessment shows you need the right structure around you to perform — that's not a weakness, that's just how you're wired. We'll design your environment accordingly.`;
+
+  const anxietyLine = isAnxious
+    ? ` Also — I can see you tend to overthink. We're going to address that head-on. Analysis is useful. Paralysis is not.`
+    : '';
+
+  const greetings = {
+    coach:`${profile.name}. Let's get one thing straight — I don't do motivation speeches. I do reality checks.\n\nYou're a **${profile.personalityType}**. ${behaviorNote}${anxietyLine}\n\nYour goal: **${profile.goal}**. Timeline: **${profile.timeline}**.\n\nBefore I give you a single piece of advice, I need to know: **What have you already tried? And why do you think it didn't work?**\n\nDon't give me a two-word answer. Be specific. That's where we start.`,
+
+    strategist:`${profile.name}, good to have you here. I've looked at your profile.\n\nYou're a **${profile.personalityType}**. ${behaviorNote}${anxietyLine}\n\n**Goal:** ${profile.goal} | **Timeline:** ${profile.timeline} | **Learning style:** ${profile.learnStyle||'not yet assessed'}\n\nBefore I build your roadmap, I need to run a quick diagnostic. Tell me:\n1. Where are you right now — in one honest paragraph\n2. What does "success" look like to you in concrete, measurable terms\n3. What's the single biggest obstacle between now and that outcome\n\nBe precise. Vague inputs give vague outputs.`,
+
+    friend:`Hey ${profile.name}! Okay so I've gone through your whole profile and I have thoughts 😄\n\nYou're what I'd call a **${profile.personalityType}** — ${profile.personalityDesc}\n\n${behaviorNote}${anxietyLine}\n\nHonestly? A lot of people in India with your profile get stuck because they're trying to follow someone else's roadmap — the "safe job", the MBA, the peer pressure moves. And it never quite fits.\n\nSo before anything else — tell me what's actually been going on. What's the real situation? No polished version. Just the honest one.`,
+
+    sage:`${profile.name}.\n\nYou've taken a step most people never take — deciding to examine their path intentionally rather than just following the current.\n\nYou are **${profile.personalityType}**. ${profile.personalityDesc}\n\n${behaviorNote}\n\nBefore I offer any guidance, I want to ask you something. And I want you to sit with it for a moment before answering:\n\n*"${profile.goal}" — is this truly YOUR goal? Or is it what you believe you should want based on what people around you have achieved?*\n\nThere is no wrong answer. But your answer will determine everything about how we work together.`
+  };
+
+  const msg = greetings[profile.persona];
+  messages.push({role:'assistant',content:msg,model:'claude',reason:'Personalized opening based on your full profile'});
+  appendBubble('assistant',msg,'claude','Personalized to your profile & personality');
+  saveMessages();
+}
+
+function showDailyCheckin(){
+  const checkinPrompts = [
+    `Good to see you back, ${profile.name}! 🔥 ${profile.streak} day streak. What's on your mind today?`,
+    `Welcome back! How did yesterday's goals go?`,
+    `${profile.name}, you're building momentum. What are you working on today?`
+  ];
+  const text = checkinPrompts[Math.floor(Math.random()*checkinPrompts.length)];
+  const div = document.createElement('div');
+  div.className = 'checkin-card';
+  div.innerHTML = `
+    <div class="checkin-title">Daily Check-in</div>
+    <div class="checkin-text">${text}</div>
+    <div class="checkin-btns">
+      <div class="checkin-btn" onclick="sendQuick('I made progress yesterday!')">✅ Made progress</div>
+      <div class="checkin-btn" onclick="sendQuick('I struggled yesterday, need help')">😔 Struggled</div>
+      <div class="checkin-btn" onclick="sendQuick('New challenge today, need guidance')">🆕 New challenge</div>
+    </div>`;
+  document.getElementById('messages').appendChild(div);
+  scrollDown();
+}
+
+function sendQuick(text){
+  document.getElementById('user-input').value = text;
+  sendMessage();
+}
+
+async function sendMessage(){
+  const text = document.getElementById('user-input').value.trim();
+  if(!text||isLoading) return;
+  const hasKey = profile.keys.claude||profile.keys.openai||profile.keys.gemini;
+  if(!hasKey){ alert('No API keys found. Please reset and add keys.'); return; }
+
+  messages.push({role:'user',content:text});
+  appendBubble('user',text);
+  document.getElementById('user-input').value='';
+  document.getElementById('user-input').style.height='auto';
+  setLoading(true);
+
+  showRouteStatus('Analyzing your message...');
+  try{
+    const route = await routeQuery(text);
+    showRouteStatus(`Connecting to ${modelLabel(route.model)} — ${route.reason}`);
+    const typId = showTyping();
+    let reply;
+    if(route.model==='claude') reply = await callClaude(messages);
+    else if(route.model==='openai') reply = await callOpenAI(messages);
+    else reply = await callGemini(messages);
+    removeTyping(typId);
+    hideRouteStatus();
+    messages.push({role:'assistant',content:reply,model:route.model,reason:route.reason});
+    appendBubble('assistant',reply,route.model,route.reason);
+    saveMessages();
+    addXP(15);
+    triggerLogIfNeeded();
+  }catch(err){
+    hideRouteStatus();
+    showError('Error: '+err.message);
+  }
+  setLoading(false);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AI ROUTING & CALLS
+// ═══════════════════════════════════════════════════════════════
+async function routeQuery(msg){
+  try{
+    const res = await fetch('/api/chat',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model:'router', system:ROUTER_SYSTEM, messages:[{role:'user',content:msg}]})
+    });
+    const d = await res.json();
+    if(d.error) throw new Error(d.error);
+    const text = d.reply || '{}';
+    const parsed = JSON.parse(text.replace(/```json|```/g,'').trim());
+    if(parsed.model) return parsed;
+    throw new Error('No model in response');
+  }catch(e){
+    // Smart keyword fallback — works with any single key
+    const l=msg.toLowerCase();
+    if(l.includes('trend')||l.includes('market')||l.includes('latest')||l.includes('2025')) return{model:'gemini',reason:'Trend query'};
+    if(l.includes('code')||l.includes('python')||l.includes('javascript')||l.includes('learn')||l.includes('skill')) return{model:'openai',reason:'Technical query'};
+    if(l.includes('career')||l.includes('job')||l.includes('goal')||l.includes('feel')||l.includes('life')) return{model:'claude',reason:'Career/life query'};
+    return{model:'openai',reason:'Default — OpenAI'};
+  }
+}
+
+// ── ALL API CALLS GO THROUGH SECURE VERCEL BACKEND ──────────
+// No API keys in the frontend. Ever.
+async function callProxy(model, msgs){
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages: msgs.map(m=>({role:m.role, content:m.content})),
+      system: buildSystemPrompt(),
+      max_tokens: 1024
+    })
+  });
+  if(!res.ok){ const e=await res.json(); throw new Error(e.error||'Server error'); }
+  const data = await res.json();
+  return data.reply;
+}
+
+async function callClaude(msgs){ return callProxy('claude', msgs); }
+async function callOpenAI(msgs){ return callProxy('openai', msgs); }
+async function callGemini(msgs){ return callProxy('gemini', msgs); }
+
+// ═══════════════════════════════════════════════════════════════
+// VOICE
+// ═══════════════════════════════════════════════════════════════
+function toggleVoice(){
+  if(!('webkitSpeechRecognition' in window||'SpeechRecognition' in window)){alert('Voice not supported in this browser. Try Chrome.');return;}
+  if(isRecording){stopVoice();return;}
+  const SR = window.SpeechRecognition||window.webkitSpeechRecognition;
+  recognition = new SR();
+  recognition.continuous = false;
+  recognition.interimResults = true;
+  recognition.lang = 'en-US';
+  recognition.onstart=()=>{isRecording=true;document.getElementById('voice-btn').classList.add('recording');};
+  recognition.onresult=e=>{
+    const transcript = Array.from(e.results).map(r=>r[0].transcript).join('');
+    document.getElementById('user-input').value = transcript;
+  };
+  recognition.onend=()=>{isRecording=false;document.getElementById('voice-btn').classList.remove('recording');};
+  recognition.onerror=()=>{isRecording=false;document.getElementById('voice-btn').classList.remove('recording');};
+  recognition.start();
+}
+
+function stopVoice(){if(recognition){recognition.stop();isRecording=false;document.getElementById('voice-btn').classList.remove('recording');}}
+
+// ═══════════════════════════════════════════════════════════════
+// DOM HELPERS
+// ═══════════════════════════════════════════════════════════════
+function renderMessages(){
+  const wrap = document.getElementById('messages');
+  wrap.innerHTML='';
+  messages.forEach(m=>appendBubble(m.role,m.content,m.model,m.reason));
+}
+
+function appendBubble(role,text,model,reason){
+  const wrap = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = `message ${role==='assistant'?'ai':'user'}`;
+  const av = document.createElement('div');
+  av.className = `msg-avatar ${role==='assistant'?'ai-av':'user-av'}`;
+  av.textContent = role==='assistant'?'🧭':(profile.name?profile.name[0].toUpperCase():'U');
+  const mw = document.createElement('div');
+  mw.className = 'msg-wrap';
+  const b = document.createElement('div');
+  b.className = 'bubble';
+  b.innerHTML = fmt(text);
+  mw.appendChild(b);
+  if(role==='assistant'&&model){
+    const tag = document.createElement('div');
+    tag.className = `model-tag ${model}`;
+    tag.innerHTML = `<span class="mdot"></span>${modelLabel(model)}${reason?` · <span style="opacity:0.65;font-weight:300">${reason}</span>`:''}`;
+    mw.appendChild(tag);
+  }
+  div.appendChild(av);div.appendChild(mw);
+  wrap.appendChild(div);
+  scrollDown();
+}
+
+function fmt(t){
+  return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,'<em>$1</em>')
+    .replace(/^###\s(.+)$/gm,'<h3>$1</h3>')
+    .replace(/^##\s(.+)$/gm,'<h3>$1</h3>')
+    .replace(/^- (.+)$/gm,'<li>$1</li>')
+    .replace(/(<li>.*<\/li>\n?)+/g,m=>`<ul>${m}</ul>`)
+    .replace(/^\d+\.\s(.+)$/gm,'<li>$1</li>')
+    .replace(/^---$/gm,'<hr/>')
+    .replace(/`(.+?)`/g,'<code>$1</code>')
+    .replace(/\n\n/g,'</p><p>')
+    .replace(/\n/g,'<br/>')
+    .replace(/^(.+)$/,'<p>$1</p>');
+}
+
+function modelLabel(m){return{claude:'Claude',openai:'GPT-4o mini',gemini:'Gemini'}[m]||m;}
+
+let tc=0;
+function showTyping(){
+  const id='t'+(++tc);
+  const wrap=document.getElementById('messages');
+  const d=document.createElement('div');d.className='message ai';d.id=id;
+  const a=document.createElement('div');a.className='msg-avatar ai-av';a.textContent='🧭';
+  const mw=document.createElement('div');mw.className='msg-wrap';
+  const b=document.createElement('div');b.className='bubble';
+  b.innerHTML='<div class="typing-ind"><div class="tdot"></div><div class="tdot"></div><div class="tdot"></div></div>';
+  mw.appendChild(b);d.appendChild(a);d.appendChild(mw);wrap.appendChild(d);scrollDown();return id;
+}
+function removeTyping(id){const e=document.getElementById(id);if(e)e.remove();}
+function showRouteStatus(msg){document.getElementById('route-msg').textContent=msg;document.getElementById('route-status').classList.add('on');}
+function hideRouteStatus(){setTimeout(()=>document.getElementById('route-status').classList.remove('on'),1500);}
+function showError(msg){const wrap=document.getElementById('messages');const e=document.createElement('div');e.className='error-msg';e.textContent=msg;wrap.appendChild(e);scrollDown();}
+function setLoading(v){isLoading=v;document.getElementById('send-btn').disabled=v;}
+function scrollDown(){document.getElementById('chat-container').scrollTop=document.getElementById('chat-container').scrollHeight;}
+
+// ═══════════════════════════════════════════════════════════════
+// PERSISTENCE
+// ═══════════════════════════════════════════════════════════════
+function saveProfile(){localStorage.setItem('mentorProfile',JSON.stringify(profile));}
+function saveMessages(){localStorage.setItem('mentorMessages',JSON.stringify(messages.slice(-40)));}
+
+function toggleSettings(){
+  alert("MentorAI v" + APP_VERSION + "\n\nAll AI models (Claude, GPT-4o, Gemini) are connected securely.\nYour profile and progress are saved on this device.\n\nStreak: " + (profile.streak||0) + " days | Level: " + (profile.level||1) + " | XP: " + (profile.xp||0));
+}
+
+function resetAll(){
+  if(confirm('Reset everything and start fresh?')){
+    localStorage.removeItem('mentorProfile');
+    localStorage.removeItem('mentorMessages');
+    location.reload();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GOOGLE SHEET LOGGING — SILENT ADMIN ANALYTICS
+// ═══════════════════════════════════════════════════════════════
+const WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbyZ3XK7sPBMOjtZ2wDX6bx1-wTk1QXY3gF9R_7mq8gf5DuvHRvAuWoSF0ymDeHpM7unfA/exec';
+const sessionStart = Date.now();
+
+function getTopics(){
+  // Extract topics from user messages by scanning keywords
+  const userMsgs = messages.filter(m=>m.role==='user').map(m=>m.content.toLowerCase()).join(' ');
+  const topicMap = {
+    'Python/Coding': ['python','code','coding','programming','function','bug','error','syntax'],
+    'Career': ['career','job','interview','resume','salary','promotion','switch'],
+    'Goals': ['goal','plan','roadmap','target','achieve','milestone'],
+    'Learning': ['learn','study','skill','course','book','resource'],
+    'Mindset': ['frustrated','stuck','confused','anxious','fear','confidence','motivation'],
+    'Business': ['startup','business','entrepreneur','product','market','customer'],
+    'Education': ['college','exam','degree','marks','subject','university'],
+  };
+  const found = [];
+  Object.entries(topicMap).forEach(([topic, keywords])=>{
+    if(keywords.some(k=>userMsgs.includes(k))) found.push(topic);
+  });
+  return found.length ? found.join(', ') : 'General';
+}
+
+function getModelsUsed(){
+  const models = [...new Set(messages.filter(m=>m.model).map(m=>m.model))];
+  return models.map(m=>({claude:'Claude',openai:'GPT-4o',gemini:'Gemini'}[m]||m)).join(', ') || 'None';
+}
+
+function getSentiment(){
+  const userMsgs = messages.filter(m=>m.role==='user').map(m=>m.content.toLowerCase()).join(' ');
+  const negative = ['frustrated','stuck','confused','failed','cant','can\'t','struggling','lost','anxious','hopeless','bad','worst','difficult'];
+  const positive = ['thanks','thank you','great','awesome','helpful','makes sense','got it','understand','better','clear','excited','motivated'];
+  const negCount = negative.filter(w=>userMsgs.includes(w)).length;
+  const posCount = positive.filter(w=>userMsgs.includes(w)).length;
+  if(posCount > negCount) return 'Positive';
+  if(negCount > posCount) return 'Frustrated';
+  return 'Neutral';
+}
+
+async function logToSheet(eventType='session_update'){
+  if(!profile.name) return; // don't log incomplete profiles
+  try{
+    const sessionDuration = Math.round((Date.now()-sessionStart)/60000); // minutes
+    const payload = {
+      eventType,
+      userName: profile.name,
+      personalityType: profile.personalityType || 'Not assessed',
+      persona: profile.persona || 'Not chosen',
+      role: profile.role || '',
+      goal: profile.goal || '',
+      timeline: profile.timeline || '',
+      learnStyle: profile.learnStyle || '',
+      totalMessages: messages.filter(m=>m.role==='user').length,
+      topicsDiscussed: getTopics(),
+      modelsUsed: getModelsUsed(),
+      sentiment: getSentiment(),
+      sessionDuration: sessionDuration + ' mins',
+      xpLevel: profile.level || 1,
+      streak: profile.streak || 0,
+      lastMessage: messages.filter(m=>m.role==='user').slice(-1)[0]?.content?.substring(0,100) || '',
+      timestamp: new Date().toISOString(),
+      sessionId: profile.sessionId || 'unknown'
+    };
+    // Fire and forget — don't block UI
+    fetch(WEBHOOK_URL, {
+      method:'POST',
+      mode:'no-cors', // Google Apps Script requires no-cors
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+  }catch(e){
+    // Fail silently — never interrupt the user experience
+  }
+}
+
+// Log on session start, every 5 messages, and on page unload
+let msgCountForLog = 0;
+function triggerLogIfNeeded(){
+  msgCountForLog++;
+  if(msgCountForLog % 5 === 0) logToSheet('message_milestone');
+}
+window.addEventListener('beforeunload', ()=>logToSheet('session_end'));
+
+// ═══════════════════════════════════════════════════════════════
+// HIDDEN ADMIN PANEL
+// ═══════════════════════════════════════════════════════════════
+const ADMIN_PASSWORD = 'mentorai2024'; // Change this to your own password
+let adminUnlocked = false;
+let adminKeyBuffer = '';
+
+// Secret keyboard shortcut: type "admin" anywhere to trigger password prompt
+document.addEventListener('keydown', e=>{
+  if(document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT') return;
+  adminKeyBuffer += e.key.toLowerCase();
+  if(adminKeyBuffer.length > 5) adminKeyBuffer = adminKeyBuffer.slice(-5);
+  if(adminKeyBuffer === 'admin') openAdminPanel();
+});
+
+function openAdminPanel(){
+  if(!adminUnlocked){
+    const pwd = prompt('🔐 Admin Access — Enter Password:');
+    if(pwd !== ADMIN_PASSWORD){ alert('Wrong password.'); adminKeyBuffer=''; return; }
+    adminUnlocked = true;
+  }
+  showAdminDashboard();
+}
+
+function showAdminDashboard(){
+  // Gather all data from localStorage across all "users" on this device
+  const allSessions = [];
+  for(let i=0; i<localStorage.length; i++){
+    const key = localStorage.key(i);
+    if(key === 'mentorProfile'){
+      try{
+        const p = JSON.parse(localStorage.getItem(key));
+        const msgs = JSON.parse(localStorage.getItem('mentorMessages')||'[]');
+        allSessions.push({profile:p, messages:msgs});
+      }catch(e){}
+    }
+  }
+
+  const p = profile;
+  const userMsgs = messages.filter(m=>m.role==='user');
+  const aiMsgs = messages.filter(m=>m.role==='assistant');
+  const modelCounts = {};
+  aiMsgs.forEach(m=>{ if(m.model) modelCounts[m.model]=(modelCounts[m.model]||0)+1; });
+
+  const panel = document.createElement('div');
+  panel.id = 'admin-panel';
+  panel.style.cssText = `position:fixed;inset:0;z-index:9999;background:rgba(8,10,15,0.97);overflow-y:auto;padding:32px 24px;font-family:'Outfit',sans-serif;color:#ede9e0;`;
+  panel.innerHTML = `
+    <div style="max-width:900px;margin:0 auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:32px">
+        <div>
+          <div style="font-family:'Cormorant Garamond',serif;font-size:32px;font-weight:700;color:#e8c87a">Admin Dashboard</div>
+          <div style="font-size:13px;color:#6b7280;margin-top:4px">MentorAI — Founder View · ${new Date().toDateString()}</div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <button onclick="exportCSV()" style="background:#e8c87a;color:#080a0f;border:none;border-radius:10px;padding:10px 20px;font-size:13px;font-weight:600;cursor:pointer;font-family:'Outfit',sans-serif">⬇ Export CSV</button>
+          <button onclick="document.getElementById('admin-panel').remove();adminUnlocked=false;" style="background:transparent;border:1px solid rgba(255,255,255,0.1);color:#6b7280;border-radius:10px;padding:10px 20px;font-size:13px;cursor:pointer;font-family:'Outfit',sans-serif">✕ Close</button>
+        </div>
+      </div>
+
+      <!-- STATS ROW -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:28px">
+        ${statCard('Total Messages', userMsgs.length, '#e8c87a')}
+        ${statCard('AI Responses', aiMsgs.length, '#5ba4cf')}
+        ${statCard('XP Level', 'Level ' + (p.level||1), '#7dd3a8')}
+        ${statCard('Day Streak', (p.streak||0) + ' days', '#e0a870')}
+        ${statCard('Session Time', Math.round((Date.now()-sessionStart)/60000) + ' mins', '#a78bfa')}
+        ${statCard('Sentiment', getSentiment(), getSentiment()==='Positive'?'#7dd3a8':getSentiment()==='Frustrated'?'#e07070':'#6b7280')}
+      </div>
+
+      <!-- USER PROFILE -->
+      <div style="background:#0f1219;border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:20px;margin-bottom:20px">
+        <div style="font-size:12px;color:#e8c87a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:14px">User Profile</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;font-size:13px">
+          ${profileRow('Name', p.name)}
+          ${profileRow('Personality', (p.personalityType||'?') + ' ' + (p.personalityEmoji||''))}
+          ${profileRow('Role', p.role||'?')}
+          ${profileRow('Goal', p.goal||'?')}
+          ${profileRow('Timeline', p.timeline||'?')}
+          ${profileRow('Learn Style', p.learnStyle||'?')}
+          ${profileRow('Mentor Persona', p.persona||'?')}
+          ${profileRow('Topics', getTopics())}
+          ${profileRow('Models Used', getModelsUsed())}
+        </div>
+      </div>
+
+      <!-- AI MODEL USAGE -->
+      <div style="background:#0f1219;border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:20px;margin-bottom:20px">
+        <div style="font-size:12px;color:#e8c87a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:14px">AI Model Usage</div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap">
+          ${Object.entries(modelCounts).map(([m,c])=>`
+            <div style="background:#161b25;border-radius:10px;padding:12px 18px;text-align:center">
+              <div style="font-size:22px;font-weight:700;color:${{claude:'#e8c87a',openai:'#7dd3a8',gemini:'#5ba4cf'}[m]||'#fff'}">${c}</div>
+              <div style="font-size:11px;color:#6b7280;margin-top:2px">${{claude:'Claude',openai:'GPT-4o',gemini:'Gemini'}[m]||m}</div>
+            </div>`).join('')}
+          ${Object.keys(modelCounts).length===0?'<div style="color:#6b7280;font-size:13px">No AI responses yet</div>':''}
+        </div>
+      </div>
+
+      <!-- FULL CHAT LOG -->
+      <div style="background:#0f1219;border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:20px">
+        <div style="font-size:12px;color:#e8c87a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:14px">Full Chat Log (${messages.length} messages)</div>
+        <div style="max-height:400px;overflow-y:auto;display:flex;flex-direction:column;gap:10px">
+          ${messages.map((m,i)=>`
+            <div style="background:#161b25;border-radius:10px;padding:12px 14px;border-left:3px solid ${m.role==='user'?'#5ba4cf':'#e8c87a'}">
+              <div style="font-size:10px;color:#6b7280;margin-bottom:5px;display:flex;justify-content:space-between">
+                <span>${m.role==='user'?'👤 '+p.name:'🧭 MentorAI'+(m.model?' ('+m.model+')':'')}</span>
+                <span>#${i+1}</span>
+              </div>
+              <div style="font-size:13px;line-height:1.6;color:#ede9e0">${(m.content||'').substring(0,300)}${m.content?.length>300?'...':''}</div>
+            </div>`).join('')}
+          ${messages.length===0?'<div style="color:#6b7280;font-size:13px">No messages yet</div>':''}
+        </div>
+      </div>
+
+      <div style="text-align:center;margin-top:20px;font-size:11px;color:#4b5563">
+        Type "admin" anywhere (outside input boxes) to reopen this panel · Password: ${ADMIN_PASSWORD}
+      </div>
+    </div>`;
+  document.body.appendChild(panel);
+}
+
+function statCard(label, value, color){
+  return `<div style="background:#0f1219;border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:16px;text-align:center">
+    <div style="font-size:22px;font-weight:700;color:${color}">${value}</div>
+    <div style="font-size:11px;color:#6b7280;margin-top:3px">${label}</div>
+  </div>`;
+}
+
+function profileRow(label, value){
+  return `<div style="background:#161b25;border-radius:8px;padding:10px 12px">
+    <div style="font-size:10px;color:#6b7280;margin-bottom:3px">${label}</div>
+    <div style="font-size:13px;color:#ede9e0;font-weight:500">${value||'—'}</div>
+  </div>`;
+}
+
+function exportCSV(){
+  const p = profile;
+  const headers = ['Timestamp','Name','Personality','Persona','Role','Goal','Timeline','LearnStyle','TotalMessages','Topics','ModelsUsed','Sentiment','XPLevel','Streak','SessionMins','LastMessage'];
+  const row = [
+    new Date().toISOString(),
+    p.name, p.personalityType, p.persona, p.role, p.goal, p.timeline, p.learnStyle,
+    messages.filter(m=>m.role==='user').length,
+    getTopics(), getModelsUsed(), getSentiment(),
+    p.level, p.streak,
+    Math.round((Date.now()-sessionStart)/60000),
+    (messages.filter(m=>m.role==='user').slice(-1)[0]?.content||'').replace(/,/g,' ').substring(0,200)
+  ];
+
+  // Also add full chat log rows
+  const chatHeaders = ['#','Role','Model','Message'];
+  const chatRows = messages.map((m,i)=>[i+1, m.role, m.model||'', (m.content||'').replace(/,/g,' ').replace(/\n/g,' ').substring(0,500)]);
+
+  let csv = '=== SESSION SUMMARY ===\n';
+  csv += headers.join(',') + '\n';
+  csv += row.map(v=>`"${v}"`).join(',') + '\n\n';
+  csv += '=== FULL CHAT LOG ===\n';
+  csv += chatHeaders.join(',') + '\n';
+  csv += chatRows.map(r=>r.map(v=>`"${v}"`).join(',')).join('\n');
+
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `mentorai_${p.name||'user'}_${new Date().toISOString().split('T')[0]}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TEXTAREA AUTO-RESIZE & KEYBOARD
+// ═══════════════════════════════════════════════════════════════
+const ta = document.getElementById('user-input');
+ta.addEventListener('input',()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,140)+'px';});
+ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}});
+
+// ═══════════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════════
+const saved = localStorage.getItem('mentorProfile');
+if(saved){
+  profile = JSON.parse(saved);
+  // Generate unique session ID
+  profile.sessionId = 'sess_' + Date.now();
+  messages = JSON.parse(localStorage.getItem('mentorMessages')||'[]');
+}
+initOnboard();
+</script>
+</body>
+</html>
