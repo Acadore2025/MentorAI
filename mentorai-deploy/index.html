@@ -638,23 +638,22 @@ async function loadUserProfile(){
 
     saveProfile();
 
-    // Check if onboarding was completed (role + goal filled)
-    if(!profile.role || !profile.goal){
-      // Partially completed — resume onboarding
-      goTo('screen-onboard');
-      initOnboard();
+    // If personality test done → they are a returning user → go straight to app
+    // Never re-run personality test for existing users
+    if(profile.personalityType){
+      launchApp();
       return;
     }
 
-    // Check if personality test was done
-    if(!profile.personalityType){
-      // Go to psych test
+    // Has basic profile but no personality test yet
+    if(profile.role && profile.goal){
       goTo('screen-psych');
       return;
     }
 
-    // Fully set up — go straight to app
-    launchApp();
+    // Incomplete onboarding — resume from where they left off
+    goTo('screen-onboard');
+    initOnboard();
 
   } catch(err) {
     console.error('loadUserProfile error:', err);
@@ -1364,15 +1363,38 @@ Calibrate entirely to their timeline: ${p.timeline}
 ════════════════════════════════════════════
 NON-NEGOTIABLE RULES
 ════════════════════════════════════════════
-- Never open with advice. Open with presence.
+- ALWAYS address the person by their first name (${(p.name||'').split(' ')[0] || 'friend'}) at least once per response — naturally, not robotically
+- Never open with advice. Open with presence and acknowledgement first.
 - Never give more than 3 action items at once
-- Never use phrases like "Great question!", "Certainly!", "Absolutely!" — these are robotic
+- Never use phrases like "Great question!", "Certainly!", "Absolutely!", "Of course!" — robotic filler
 - Never give generic advice: "work hard", "be consistent", "believe in yourself" = useless
-- Always use their name naturally (not every sentence — naturally)
-- Always reference Indian context where relevant
-- Always match examples to their personality type
-- Call out patterns directly when you see them: "I'm noticing something — want me to share it?"
-- If they're clearly in their head: "${p.name}, I'm going to stop you there for a second."
+- Always reference Indian context where relevant (IIT, UPSC, JEE, startup ecosystem, family pressure)
+- Always match examples to their personality type: ${p.personalityType || 'their profile'}
+- Call out patterns directly: "I'm noticing something — want me to share it?"
+- If they're clearly in their head: "${(p.name||'').split(' ')[0] || 'hey'}, I'm going to stop you there."
+
+WHEN USER SHARES A STARTUP / BUSINESS IDEA:
+- NEVER jump into teaching or study mode automatically
+- First: acknowledge the emotional weight — family pressure, startup pressure is real
+- Second: repeat the idea back in your own words to show you understood it
+- Third: share a real story from someone with a similar personality type (e.g. Byju Raveendran, Ritesh Agarwal, or relevant global founder)
+- Fourth: ask exactly ONE deep clarifying question — not a list
+- Fifth: offer a choice naturally in conversation: "Want to work through this together over time, or get a focused action plan right now?"
+
+WHEN USER SHARES EMOTIONAL STRUGGLE (failing, stuck, don't understand, overwhelmed):
+- Lead with empathy FIRST — 2-3 sentences acknowledging exactly what they said
+- Never give advice until they feel truly heard
+- Share a real parallel story from someone who faced the same wall
+- Then ask: "Can I share something that might reframe this for you?"
+- If the pattern continues over 3+ messages (still stuck, still confused, nothing working):
+  Naturally offer Study Mode: "I'm thinking we approach this differently — like studying together, one step at a time. Want to try that?"
+
+WHEN TO OFFER STUDY MODE (let conversation decide — never auto-trigger):
+- User says they keep trying but nothing sticks
+- User says they don't understand something repeatedly  
+- User feels overwhelmed by too much information
+- User asks to learn something step by step
+- Only offer it naturally in conversation, never as a popup interrupt
 
 RESPONSE LENGTH OVERRIDE (HIGHEST PRIORITY):
 - "summarize / brief / short / tldr / quickly / in one line" → 3-5 lines MAX. No headers. No bullets. Conversational only.
@@ -1589,8 +1611,18 @@ DAILY SESSION STRUCTURE:
 // ── DETECT STUDY INTENT IN MESSAGE ───────────────────────────
 function detectStudyIntent(msg){
   const l = msg.toLowerCase();
-  const studyKeywords = ['study','learn','roadmap','course','prepare','practise','practice','understand','master','teach me','explain','i want to learn','help me learn','syllabus','curriculum'];
-  return studyKeywords.some(k => l.includes(k));
+  
+  // NEVER trigger study mode if user is talking about their startup/business/project
+  const businessContext = ['startup','business','company','founder','building a','built a','working on','my idea','my product','my app','my project','client','customer','market','funding','investor','pitch','team','co-founder','revenue','users'];
+  if(businessContext.some(k => l.includes(k))) return false;
+  
+  // NEVER trigger for emotional/personal messages
+  const emotionalContext = ['feeling','feel','struggling','stuck','failing','failed','family','pressure','stress','worried','anxious','help me','support','motivation','lost','confused'];
+  if(emotionalContext.some(k => l.includes(k))) return false;
+  
+  // Only trigger when user is EXPLICITLY asking to study something for THEMSELVES
+  const explicitStudy = ['i want to learn','help me learn','teach me','i want to study','let's study','study with me','my roadmap','learning roadmap','i need to learn','how do i learn','where do i start learning'];
+  return explicitStudy.some(k => l.includes(k));
 }
 
 // ── SHOW STUDY MODE CHOICE CARD ──────────────────────────────
@@ -1635,17 +1667,6 @@ async function sendMessage(){
   appendBubble('user',text);
   document.getElementById('user-input').value='';
   document.getElementById('user-input').style.height='auto';
-  
-  // Detect study intent — offer study together mode if not already active
-  if(!studyMode.active && detectStudyIntent(text)){
-    const topicMatch = text.match(/(?:learn|study|understand|master|prepare for|teach me|explain)\s+(.+?)(?:\?|$|\.)/i);
-    const topic = topicMatch ? topicMatch[1].trim() : text.replace(/[?!.]/g,'').trim().substring(0,40);
-    if(topic.length > 3){
-      setLoading(true);
-      setTimeout(()=>{ showStudyChoiceCard(topic); setLoading(false); }, 600);
-      return;
-    }
-  }
   
   setLoading(true);
 
