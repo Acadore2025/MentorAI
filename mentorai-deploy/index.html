@@ -270,6 +270,22 @@ pointer-events:none;z-index:0}
 .auth-footer{text-align:center;font-size:12px;color:var(--muted2);margin-top:14px}
 .auth-footer span{color:var(--accent);cursor:pointer}
 .auth-footer span:hover{opacity:0.8}
+
+/* ── STUDY TOGETHER MODE ── */
+.study-mode-banner{background:linear-gradient(135deg,rgba(232,200,122,0.12),rgba(91,164,207,0.08));border:1px solid rgba(232,200,122,0.25);border-radius:14px;padding:12px 16px;margin:10px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.study-mode-info{display:flex;align-items:center;gap:10px}
+.study-mode-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:pulse 2s infinite}
+.study-mode-text{font-size:12.5px;color:var(--accent);font-weight:500}
+.study-mode-sub{font-size:11px;color:var(--muted);margin-top:2px}
+.study-end-btn{font-size:11px;color:var(--muted);background:transparent;border:1px solid var(--border);border-radius:8px;padding:5px 10px;cursor:pointer;font-family:'Outfit',sans-serif;white-space:nowrap}
+.study-end-btn:hover{color:var(--danger);border-color:var(--danger)}
+.study-day-card{background:linear-gradient(135deg,var(--surface2),var(--surface3));border:1px solid rgba(232,200,122,0.2);border-radius:16px;padding:20px;margin:8px 0}
+.study-day-header{font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;font-weight:600}
+.study-day-title{font-size:17px;font-weight:600;color:var(--text);margin-bottom:10px;font-family:'Cormorant Garamond',serif}
+.study-choice-row{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+.study-choice{background:var(--surface);border:1px solid var(--border2);border-radius:10px;padding:10px 16px;font-size:13px;color:var(--text);cursor:pointer;transition:all 0.2s;font-family:'Outfit',sans-serif}
+.study-choice:hover{border-color:var(--accent);color:var(--accent)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
 </style>
 </head>
 <body>
@@ -670,6 +686,18 @@ async function signOut(){
 // STATE
 // ═══════════════════════════════════════════════════════════════
 const APP_VERSION = '1.0.0'; // Update this when you deploy new versions
+
+// ── STUDY TOGETHER STATE ─────────────────────────────────────
+let studyMode = {
+  active: false,
+  topic: '',
+  currentDay: 1,
+  totalDays: 30,
+  style: 'daily', // 'daily' or 'fullroadmap'
+  todayComplete: false,
+  roadmap: [] // array of daily lessons
+};
+
 let profile = {
   name:'', age:'', gender:'', role:'', goal:'', timeline:'',
   traits:{openness:0,conscientiousness:0,extraversion:0,agreeableness:0,neuroticism:0},
@@ -1006,6 +1034,7 @@ function launchApp(){
   document.getElementById('screen-app').classList.remove('hidden');
   updateHUD();
   renderMessages();
+  loadStudyMode();
   if(messages.length===0){ showWelcomeMessage(); logToSheet('session_start'); }
   else { showDailyCheckin(); logToSheet('returning_user'); }
 }
@@ -1091,6 +1120,7 @@ function buildSystemPrompt(){
     : "Extroverted — leverage people and conversations as primary learning and growth tool.";
 
   return `${PERSONA_PROMPTS[p.persona]}
+${getStudyModeContext()}
 
 ════════════════════════════════════════════
 MASTER KNOWLEDGE LIBRARY — YOUR FOUNDATION
@@ -1355,6 +1385,180 @@ function sendQuick(text){
   sendMessage();
 }
 
+
+// ═══════════════════════════════════════════════════════════════
+// STUDY TOGETHER MODE
+// ═══════════════════════════════════════════════════════════════
+
+function activateStudyMode(topic, style, days){
+  studyMode.active = true;
+  studyMode.topic = topic;
+  studyMode.style = style;
+  studyMode.totalDays = days || 30;
+  studyMode.currentDay = 1;
+  studyMode.todayComplete = false;
+  saveStudyMode();
+  renderStudyBanner();
+}
+
+function renderStudyBanner(){
+  const banner = document.getElementById('study-banner');
+  if(!studyMode.active){ banner.style.display='none'; return; }
+  banner.style.display = 'block';
+  banner.innerHTML = `
+    <div class="study-mode-banner">
+      <div class="study-mode-info">
+        <div class="study-mode-dot"></div>
+        <div>
+          <div class="study-mode-text">📚 Study Mode: ${studyMode.topic}</div>
+          <div class="study-mode-sub">Day ${studyMode.currentDay} of ${studyMode.totalDays} · ${studyMode.style === 'daily' ? 'Daily buddy mode' : 'Full roadmap mode'}</div>
+        </div>
+      </div>
+      <button class="study-end-btn" onclick="endStudyMode()">End session</button>
+    </div>`;
+}
+
+function endStudyMode(){
+  if(!confirm('End this study session? Your progress is saved.')) return;
+  studyMode.active = false;
+  studyMode.topic = '';
+  saveStudyMode();
+  renderStudyBanner();
+  addSystemMessage('Study session ended. Come back tomorrow to continue! 💪');
+}
+
+function saveStudyMode(){
+  localStorage.setItem('sparkmate_study', JSON.stringify(studyMode));
+  if(currentUser){
+    sb.from('user_profiles').upsert({
+      id: currentUser.id,
+      study_topic: studyMode.topic,
+      study_day: studyMode.currentDay,
+      study_active: studyMode.active
+    }).catch(()=>{});
+  }
+}
+
+function loadStudyMode(){
+  const saved = localStorage.getItem('sparkmate_study');
+  if(saved){
+    try{ studyMode = {...studyMode, ...JSON.parse(saved)}; }catch(e){}
+  }
+  renderStudyBanner();
+}
+
+function addSystemMessage(text){
+  const div = document.createElement('div');
+  div.style.cssText = 'text-align:center;font-size:12px;color:var(--muted);padding:8px 16px;margin:4px 0';
+  div.textContent = text;
+  document.getElementById('messages').appendChild(div);
+  scrollDown();
+}
+
+// ── STUDY TOGETHER SYSTEM PROMPT INJECTION ───────────────────
+function getStudyModeContext(){
+  if(!studyMode.active) return '';
+  
+  return `
+════════════════════════════════════════════
+STUDY TOGETHER MODE — ACTIVE
+════════════════════════════════════════════
+The student is currently in "Study Together" mode.
+Topic: ${studyMode.topic}
+Current Day: ${studyMode.currentDay} of ${studyMode.totalDays}
+Study Style: ${studyMode.style === 'daily' ? 'Daily buddy — one day at a time' : 'Full roadmap'}
+Student Learning Style: ${profile.learnStyle || 'not specified'}
+
+YOUR ROLE AS STUDY BUDDY:
+You are not just answering questions — you are TEACHING alongside the student today.
+
+TODAY'S APPROACH:
+${studyMode.style === 'daily' ? `
+- Focus ONLY on what can be learned/practiced TODAY in 30-45 minutes
+- Never dump the entire roadmap — reveal ONE day at a time
+- End every study session with: what was learned today, what comes tomorrow, and an encouraging sign-off
+- If student asks "what's next?" → give tomorrow's preview but say "let's master today first"
+- Always check if they understood before moving on: "Try this quick exercise" or "Explain this back to me in your own words"
+` : `
+- Student wants the full roadmap — give it structured by weeks
+- But still check in daily and guide them through each step
+`}
+
+TEACHING STYLE BASED ON LEARNING PROFILE:
+${(profile.learnStyle||'').includes('doing') || (profile.learnStyle||'').includes('project') ? `
+KINESTHETIC LEARNER — TEACH BY DOING:
+- Give a hands-on mini exercise or challenge for every concept
+- "Before I explain, try this: [exercise]"
+- Recommend: specific projects to build, LeetCode problems, coding challenges
+- Theory comes AFTER they've tried, not before
+` : (profile.learnStyle||'').includes('listen') ? `
+AUDITORY LEARNER — TEACH BY EXPLAINING:
+- Explain concepts conversationally, like talking over coffee
+- "Imagine I'm explaining this at a whiteboard..."
+- Recommend: specific YouTube videos, podcasts — always with timestamps
+- Use analogies and stories heavily
+` : `
+VISUAL/READING LEARNER — TEACH BY STRUCTURE:
+- Give clear written breakdowns with headers and steps
+- Use comparison tables, before/after examples
+- Recommend: specific articles, documentation, illustrated guides
+- Draw concepts in text: "Picture it like this: [ASCII diagram or description]"
+`}
+
+EMOTIONAL CHECK BEFORE TEACHING:
+- Always start a session by sensing their energy: "How are you feeling about today's session?"
+- If they seem stressed/overwhelmed → shrink the goal: "Let's just do 15 minutes today. One concept."
+- If they're energised → push them a bit further than planned
+- Never make them feel behind. "You're exactly where you need to be."
+
+DAILY SESSION STRUCTURE:
+1. Quick energy check (1 message)
+2. Recap yesterday briefly (if Day 2+)
+3. Introduce today's concept with a hook — make them curious
+4. Teach it in their style
+5. Give an exercise/challenge to test understanding
+6. Celebrate completion + preview tomorrow
+7. Sign off warmly: "See you tomorrow, [name]. You showed up today — that's the hardest part."
+`;
+}
+
+// ── DETECT STUDY INTENT IN MESSAGE ───────────────────────────
+function detectStudyIntent(msg){
+  const l = msg.toLowerCase();
+  const studyKeywords = ['study','learn','roadmap','course','prepare','practise','practice','understand','master','teach me','explain','i want to learn','help me learn','syllabus','curriculum'];
+  return studyKeywords.some(k => l.includes(k));
+}
+
+// ── SHOW STUDY MODE CHOICE CARD ──────────────────────────────
+function showStudyChoiceCard(topic){
+  const div = document.createElement('div');
+  div.className = 'study-day-card';
+  div.innerHTML = `
+    <div class="study-day-header">📚 Study Mode Detected</div>
+    <div class="study-day-title">How do you want to learn "${topic}"?</div>
+    <p style="font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:4px">I can give you everything at once, or we can study together daily — like a real class.</p>
+    <div class="study-choice-row">
+      <button class="study-choice" onclick="startStudyTogether('${topic.replace(/'/g,"\'")}', 'daily')">📅 Study with me daily<br><span style="font-size:11px;color:var(--muted)">30 min/day · I'll guide you step by step</span></button>
+      <button class="study-choice" onclick="startStudyTogether('${topic.replace(/'/g,"\'")}', 'fullroadmap')">🗺️ Give me the full roadmap<br><span style="font-size:11px;color:var(--muted)">Complete plan · You go at your own pace</span></button>
+    </div>`;
+  document.getElementById('messages').appendChild(div);
+  scrollDown();
+}
+
+async function startStudyTogether(topic, style){
+  // Remove the choice card
+  document.querySelectorAll('.study-day-card').forEach(c => c.remove());
+  
+  activateStudyMode(topic, style, 30);
+  
+  const text = style === 'daily'
+    ? `Let's study "${topic}" together, one day at a time. Start Day 1 with me.`
+    : `Give me the full roadmap for "${topic}"`;
+  
+  document.getElementById('user-input').value = text;
+  sendMessage();
+}
+
 async function sendMessage(){
   const text = document.getElementById('user-input').value.trim();
   if(!text||isLoading) return;
@@ -1367,6 +1571,18 @@ async function sendMessage(){
   appendBubble('user',text);
   document.getElementById('user-input').value='';
   document.getElementById('user-input').style.height='auto';
+  
+  // Detect study intent — offer study together mode if not already active
+  if(!studyMode.active && detectStudyIntent(text)){
+    const topicMatch = text.match(/(?:learn|study|understand|master|prepare for|teach me|explain)\s+(.+?)(?:\?|$|\.)/i);
+    const topic = topicMatch ? topicMatch[1].trim() : text.replace(/[?!.]/g,'').trim().substring(0,40);
+    if(topic.length > 3){
+      setLoading(true);
+      setTimeout(()=>{ showStudyChoiceCard(topic); setLoading(false); }, 600);
+      return;
+    }
+  }
+  
   setLoading(true);
 
   showRouteStatus('Analyzing your message...');
