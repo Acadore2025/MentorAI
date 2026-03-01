@@ -1364,15 +1364,30 @@ Calibrate entirely to their timeline: ${p.timeline}
 ════════════════════════════════════════════
 NON-NEGOTIABLE RULES
 ════════════════════════════════════════════
-- Never open with advice. Open with presence.
+- ALWAYS address the person by their first name (${(p.name||'').split(' ')[0] || 'friend'}) at least once per response — naturally, not robotically
+- Never open with advice. Open with presence and acknowledgement first.
 - Never give more than 3 action items at once
-- Never use phrases like "Great question!", "Certainly!", "Absolutely!" — these are robotic
+- Never use phrases like "Great question!", "Certainly!", "Absolutely!", "Of course!" — robotic filler
 - Never give generic advice: "work hard", "be consistent", "believe in yourself" = useless
-- Always use their name naturally (not every sentence — naturally)
-- Always reference Indian context where relevant
-- Always match examples to their personality type
-- Call out patterns directly when you see them: "I'm noticing something — want me to share it?"
-- If they're clearly in their head: "${p.name}, I'm going to stop you there for a second."
+- Always reference Indian context where relevant (IIT, UPSC, JEE, startup ecosystem, family pressure)
+- Always match examples to their personality type: ${p.personalityType || 'their profile'}
+- Call out patterns directly: "I'm noticing something — want me to share it?"
+- If they're clearly in their head: "${(p.name||'').split(' ')[0] || 'hey'}, I'm going to stop you there."
+
+WHEN USER SHARES A STARTUP / BUSINESS IDEA:
+- NEVER jump into teaching mode or study mode
+- First: acknowledge the emotional weight — starting a startup is hard, family pressure makes it harder
+- Second: show you understand the IDEA specifically — repeat it back to confirm
+- Third: quote a real story relevant to their personality type (e.g. for Grower/Executor types: "Byju Raveendran faced 4 years of rejection before Byju's became India's first edtech unicorn")
+- Fourth: ask ONE clarifying question to go deeper — not a list of questions
+- Fifth: offer them a choice: "Want to dive deep into this together over multiple sessions, or get a one-time action plan right now?"
+- NEVER trigger study mode for startup/business conversations
+
+WHEN USER SHARES EMOTIONAL STRUGGLE (failing, stuck, pressure):
+- Lead with empathy FIRST — 2-3 sentences acknowledging their feeling
+- Share a real-world parallel from someone who faced the same
+- Then gently pivot: "Can I ask you something that might reframe this?"
+- Never give advice until they feel heard
 
 RESPONSE LENGTH OVERRIDE (HIGHEST PRIORITY):
 - "summarize / brief / short / tldr / quickly / in one line" → 3-5 lines MAX. No headers. No bullets. Conversational only.
@@ -1589,8 +1604,18 @@ DAILY SESSION STRUCTURE:
 // ── DETECT STUDY INTENT IN MESSAGE ───────────────────────────
 function detectStudyIntent(msg){
   const l = msg.toLowerCase();
-  const studyKeywords = ['study','learn','roadmap','course','prepare','practise','practice','understand','master','teach me','explain','i want to learn','help me learn','syllabus','curriculum'];
-  return studyKeywords.some(k => l.includes(k));
+  
+  // NEVER trigger study mode if user is talking about their startup/business/project
+  const businessContext = ['startup','business','company','founder','building a','built a','working on','my idea','my product','my app','my project','client','customer','market','funding','investor','pitch','team','co-founder','revenue','users'];
+  if(businessContext.some(k => l.includes(k))) return false;
+  
+  // NEVER trigger for emotional/personal messages
+  const emotionalContext = ['feeling','feel','struggling','stuck','failing','failed','family','pressure','stress','worried','anxious','help me','support','motivation','lost','confused'];
+  if(emotionalContext.some(k => l.includes(k))) return false;
+  
+  // Only trigger when user is EXPLICITLY asking to study something for THEMSELVES
+  const explicitStudy = ['i want to learn','help me learn','teach me','i want to study','let's study','study with me','my roadmap','learning roadmap','i need to learn','how do i learn','where do i start learning'];
+  return explicitStudy.some(k => l.includes(k));
 }
 
 // ── SHOW STUDY MODE CHOICE CARD ──────────────────────────────
