@@ -602,10 +602,12 @@ async function handleAuth(){
 // ── LOAD EXISTING USER PROFILE ───────────────────────────────
 async function loadUserProfile(){
   try {
+    console.log('🔍 Loading profile for user:', currentUser.id, currentUser.email);
     const { data, error } = await sb.from('user_profiles').select('*').eq('id', currentUser.id).single();
+    console.log('📦 Supabase response:', JSON.stringify({data: data ? {name:data.name, personality_type:data.personality_type, role:data.role} : null, error}));
 
     if(error || !data || !data.name){
-      // Brand new user — go to onboarding
+      console.log('⚠️ No profile found — going to onboarding');
       goTo('screen-onboard');
       initOnboard();
       return;
@@ -640,7 +642,9 @@ async function loadUserProfile(){
 
     // If personality test done → they are a returning user → go straight to app
     // Never re-run personality test for existing users
+    console.log('✅ Profile loaded. personalityType:', profile.personalityType, '| role:', profile.role, '| goal:', profile.goal);
     if(profile.personalityType){
+      console.log('🚀 Going straight to app');
       launchApp();
       return;
     }
@@ -925,17 +929,6 @@ function nextOnboard(){
     profile.goal = onboardData.goal;
     profile.timeline = onboardData.timeline;
     profile.learnStyle = onboardData.learnStyle;
-    // Save onboarding data immediately
-    if(currentUser){
-      sb.from('user_profiles').upsert({
-        id: currentUser.id,
-        name: profile.name || '',
-        role: onboardData.role || '',
-        goal: onboardData.goal || '',
-        timeline: onboardData.timeline || '',
-        learn_style: onboardData.learnStyle || ''
-      }).then(r => console.log('Onboarding saved', r.error || 'OK'));
-    }
     goTo('screen-psych');
     renderPsychQ(0);
   }
@@ -1011,21 +1004,7 @@ function computePersonality(){
   profile.personalityType = matched.name;
   profile.personalityEmoji = matched.emoji;
   profile.personalityDesc = matched.desc;
-  // Save personality immediately to Supabase
-  if(currentUser){
-    sb.from('user_profiles').upsert({
-      id: currentUser.id,
-      name: profile.name || '',
-      role: profile.role || '',
-      goal: profile.goal || '',
-      timeline: profile.timeline || '',
-      learn_style: profile.learnStyle || '',
-      personality_type: matched.name,
-      personality_emoji: matched.emoji,
-      personality_desc: matched.desc,
-      traits: profile.traits || {}
-    }).then(r => console.log('Personality saved', r.error || 'OK'));
-  }
+  // profile already updated above — full save happens at saveKeysAndStart
 
   // Render result
   document.getElementById('result-emoji').textContent = matched.emoji;
@@ -1056,27 +1035,21 @@ function selectPersona(el){
 function confirmPersona(){
   if(!selectedPersona) return;
   profile.persona = selectedPersona;
-  // Save persona immediately
-  if(currentUser){
-    sb.from('user_profiles').upsert({
-      id: currentUser.id,
-      persona: selectedPersona
-    }).then(r => console.log('Persona saved', r.error || 'OK'));
-  }
   goTo('screen-keys');
 }
 
 // ═══════════════════════════════════════════════════════════════
 // KEYS & LAUNCH
 // ═══════════════════════════════════════════════════════════════
-function saveKeysAndStart(){
+async function saveKeysAndStart(){
   profile.keys = {claude:'server', openai:'server', gemini:'server'};
   profile.xp = 0; profile.level = 1; profile.streak = 1;
   profile.lastVisit = new Date().toDateString();
   saveProfile();
-  // Force immediate Supabase sync so profile persists across sessions
+
+  // Save COMPLETE profile to Supabase — wait for it before launching
   if(currentUser) {
-    sb.from('user_profiles').upsert({
+    const { error } = await sb.from('user_profiles').upsert({
       id: currentUser.id,
       name: profile.name || '',
       age: profile.age ? parseInt(profile.age) : null,
@@ -1092,10 +1065,9 @@ function saveKeysAndStart(){
       traits: profile.traits || {},
       xp: 0, level: 1, streak: 1,
       last_visit: new Date().toDateString()
-    }).then(({error}) => {
-      if(error) console.error('Profile save error:', error);
-      else console.log('Profile saved to Supabase successfully');
     });
+    if(error) console.error('Profile save error:', error);
+    else console.log('✅ Full profile saved to Supabase');
   }
   launchApp();
 }
