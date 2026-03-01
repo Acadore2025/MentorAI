@@ -601,40 +601,66 @@ async function handleAuth(){
 
 // ── LOAD EXISTING USER PROFILE ───────────────────────────────
 async function loadUserProfile(){
-  const { data, error } = await sb.from('user_profiles').select('*').eq('id', currentUser.id).single();
-  if(error || !data){
-    // New user — go to onboarding
+  try {
+    const { data, error } = await sb.from('user_profiles').select('*').eq('id', currentUser.id).single();
+
+    if(error || !data || !data.name){
+      // Brand new user — go to onboarding
+      goTo('screen-onboard');
+      initOnboard();
+      return;
+    }
+
+    // Load ALL profile data from Supabase
+    profile.name = data.name || '';
+    profile.age = data.age || '';
+    profile.gender = data.gender || '';
+    profile.role = data.role || '';
+    profile.goal = data.goal || '';
+    profile.timeline = data.timeline || '';
+    profile.learnStyle = data.learn_style || '';
+    profile.personalityType = data.personality_type || '';
+    profile.personalityEmoji = data.personality_emoji || '';
+    profile.personalityDesc = data.personality_desc || '';
+    profile.persona = data.persona || 'coach';
+    profile.traits = data.traits || {};
+    profile.xp = data.xp || 0;
+    profile.level = data.level || 1;
+    profile.streak = data.streak || 0;
+    profile.lastVisit = data.last_visit || '';
+    profile.keys = { claude:'server', openai:'server', gemini:'server' };
+
+    // Load chat messages from Supabase
+    const { data: msgs } = await sb.from('chat_messages')
+      .select('*').eq('user_id', currentUser.id)
+      .order('created_at', { ascending: true }).limit(40);
+    messages = (msgs || []).map(m => ({ role: m.role, content: m.content, model: m.model, reason: m.reason }));
+
+    saveProfile();
+
+    // Check if onboarding was completed (role + goal filled)
+    if(!profile.role || !profile.goal){
+      // Partially completed — resume onboarding
+      goTo('screen-onboard');
+      initOnboard();
+      return;
+    }
+
+    // Check if personality test was done
+    if(!profile.personalityType){
+      // Go to psych test
+      goTo('screen-psych');
+      return;
+    }
+
+    // Fully set up — go straight to app
+    launchApp();
+
+  } catch(err) {
+    console.error('loadUserProfile error:', err);
     goTo('screen-onboard');
     initOnboard();
-    return;
   }
-  // Returning user — load their profile
-  profile.name = data.name;
-  profile.age = data.age;
-  profile.gender = data.gender;
-  profile.role = data.role;
-  profile.goal = data.goal;
-  profile.timeline = data.timeline;
-  profile.learnStyle = data.learn_style;
-  profile.personalityType = data.personality_type;
-  profile.personalityEmoji = data.personality_emoji;
-  profile.personalityDesc = data.personality_desc;
-  profile.persona = data.persona || 'coach';
-  profile.traits = data.traits || {};
-  profile.xp = data.xp || 0;
-  profile.level = data.level || 1;
-  profile.streak = data.streak || 0;
-  profile.lastVisit = data.last_visit;
-  profile.keys = { claude:'server', openai:'server', gemini:'server' };
-
-  // Load chat messages
-  const { data: msgs } = await sb.from('chat_messages')
-    .select('*').eq('user_id', currentUser.id)
-    .order('created_at', { ascending: true }).limit(40);
-  messages = (msgs || []).map(m => ({ role: m.role, content: m.content, model: m.model, reason: m.reason }));
-
-  saveProfile();
-  launchApp();
 }
 
 // ── SAVE PROFILE TO SUPABASE ─────────────────────────────────
@@ -642,22 +668,22 @@ async function saveProfileToSupabase(){
   if(!currentUser) return;
   await sb.from('user_profiles').upsert({
     id: currentUser.id,
-    name: profile.name,
+    name: profile.name || '',
     age: profile.age ? parseInt(profile.age) : null,
-    gender: profile.gender,
-    role: profile.role,
-    goal: profile.goal,
-    timeline: profile.timeline,
-    learn_style: profile.learnStyle,
-    personality_type: profile.personalityType,
-    personality_emoji: profile.personalityEmoji,
-    personality_desc: profile.personalityDesc,
-    persona: profile.persona,
-    traits: profile.traits,
-    xp: profile.xp,
-    level: profile.level,
-    streak: profile.streak,
-    last_visit: profile.lastVisit
+    gender: profile.gender || null,
+    role: profile.role || null,
+    goal: profile.goal || null,
+    timeline: profile.timeline || null,
+    learn_style: profile.learnStyle || null,
+    personality_type: profile.personalityType || null,
+    personality_emoji: profile.personalityEmoji || null,
+    personality_desc: profile.personalityDesc || null,
+    persona: profile.persona || 'coach',
+    traits: profile.traits || {},
+    xp: profile.xp || 0,
+    level: profile.level || 1,
+    streak: profile.streak || 0,
+    last_visit: profile.lastVisit || new Date().toDateString()
   });
 }
 
@@ -1040,7 +1066,7 @@ function launchApp(){
 }
 
 function updateHUD(){
-  const initials = profile.name ? profile.name[0].toUpperCase() : '?';
+  const initials = (profile&&profile.name&&profile.name.length>0) ? profile.name[0].toUpperCase() : '?';
   document.getElementById('hdr-avatar').textContent = initials;
   document.getElementById('hdr-name').textContent = profile.name;
   document.getElementById('hdr-level').textContent = `Level ${profile.level}`;
@@ -1696,7 +1722,7 @@ function appendBubble(role,text,model,reason){
   div.className = `message ${role==='assistant'?'ai':'user'}`;
   const av = document.createElement('div');
   av.className = `msg-avatar ${role==='assistant'?'ai-av':'user-av'}`;
-  av.textContent = role==='assistant'?'🧭':(profile.name?profile.name[0].toUpperCase():'U');
+  av.textContent = role==='assistant'?'🧭':((profile&&profile.name&&profile.name.length>0)?profile.name[0].toUpperCase():'U');
   const mw = document.createElement('div');
   mw.className = 'msg-wrap';
   const b = document.createElement('div');
@@ -1730,7 +1756,7 @@ function fmt(t){
     .replace(/^(.+)$/,'<p>$1</p>');
 }
 
-function modelLabel(m){return{claude:'Claude',openai:'GPT-4o mini',gemini:'Gemini'}[m]||m;}
+function modelLabel(m){return{claude:'Claude',openai:'GPT-4o mini',gemini:'Gemini'}[m]||(m||'AI');}
 
 let tc=0;
 function showTyping(){
