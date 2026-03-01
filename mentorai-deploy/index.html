@@ -921,11 +921,21 @@ function nextOnboard(){
     onboardStep++;
     renderOnboardStep();
   } else {
-    profile.name = onboardData.name;
     profile.role = onboardData.role;
     profile.goal = onboardData.goal;
     profile.timeline = onboardData.timeline;
     profile.learnStyle = onboardData.learnStyle;
+    // Save onboarding data immediately
+    if(currentUser){
+      sb.from('user_profiles').upsert({
+        id: currentUser.id,
+        name: profile.name || '',
+        role: onboardData.role || '',
+        goal: onboardData.goal || '',
+        timeline: onboardData.timeline || '',
+        learn_style: onboardData.learnStyle || ''
+      }).then(r => console.log('Onboarding saved', r.error || 'OK'));
+    }
     goTo('screen-psych');
     renderPsychQ(0);
   }
@@ -1001,6 +1011,21 @@ function computePersonality(){
   profile.personalityType = matched.name;
   profile.personalityEmoji = matched.emoji;
   profile.personalityDesc = matched.desc;
+  // Save personality immediately to Supabase
+  if(currentUser){
+    sb.from('user_profiles').upsert({
+      id: currentUser.id,
+      name: profile.name || '',
+      role: profile.role || '',
+      goal: profile.goal || '',
+      timeline: profile.timeline || '',
+      learn_style: profile.learnStyle || '',
+      personality_type: matched.name,
+      personality_emoji: matched.emoji,
+      personality_desc: matched.desc,
+      traits: profile.traits || {}
+    }).then(r => console.log('Personality saved', r.error || 'OK'));
+  }
 
   // Render result
   document.getElementById('result-emoji').textContent = matched.emoji;
@@ -1031,6 +1056,13 @@ function selectPersona(el){
 function confirmPersona(){
   if(!selectedPersona) return;
   profile.persona = selectedPersona;
+  // Save persona immediately
+  if(currentUser){
+    sb.from('user_profiles').upsert({
+      id: currentUser.id,
+      persona: selectedPersona
+    }).then(r => console.log('Persona saved', r.error || 'OK'));
+  }
   goTo('screen-keys');
 }
 
