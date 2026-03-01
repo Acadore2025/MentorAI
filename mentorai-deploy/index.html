@@ -1084,8 +1084,13 @@ function launchApp(){
   updateHUD();
   renderMessages();
   loadStudyMode();
-  if(messages.length===0){ showWelcomeMessage(); logToSheet('session_start'); }
-  else { showDailyCheckin(); logToSheet('returning_user'); }
+  if(messages.length===0){ 
+    showWelcomeMessage(); 
+    logToSheet('session_start'); 
+  } else { 
+    showDailyCheckin(); 
+    logToSheet('returning_user'); 
+  }
 }
 
 function updateHUD(){
@@ -1412,8 +1417,8 @@ function showWelcomeMessage(){
   };
 
   const msg = greetings[persona] || greetings['friend'];
-  messages.push({role:'assistant',content:msg,model:'claude',reason:'Personalized opening based on your full profile'});
-  appendBubble('assistant',msg,'claude','Personalized to your profile & personality');
+  messages.push({role:'assistant',content:msg,model:'openai',reason:'Personalized opening based on your full profile'});
+  appendBubble('assistant',msg,'openai','Personalized to your profile & personality');
   saveMessages();
 }
 
@@ -2137,3 +2142,5 @@ if(document.readyState === 'loading'){
 </script>
 </body>
 </html>
+
+
