@@ -4,6 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>MentorAI — Your Growth Companion</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet"/>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -245,12 +246,36 @@ pointer-events:none;z-index:0}
   .traits-grid{grid-template-columns:1fr}
   .choice-grid{grid-template-columns:1fr}
 }
+
+/* ── AUTH SCREEN ── */
+#screen-auth{background:var(--bg)}
+.auth-card{background:var(--surface);border:1px solid var(--border);border-radius:24px;padding:clamp(24px,5vw,44px);max-width:460px;width:100%;animation:fadeUp 0.4s ease both}
+.auth-logo{font-family:'Cormorant Garamond',serif;font-size:34px;font-weight:700;text-align:center;margin-bottom:4px}
+.auth-logo span{color:var(--accent)}
+.auth-sub{font-size:13px;color:var(--muted);text-align:center;margin-bottom:28px;font-weight:300;line-height:1.6}
+.auth-tabs{display:flex;background:var(--surface2);border-radius:10px;padding:3px;margin-bottom:22px;gap:3px}
+.auth-tab{flex:1;padding:9px;border:none;background:transparent;color:var(--muted);cursor:pointer;border-radius:8px;font-family:'Outfit',sans-serif;font-size:13px;font-weight:500;transition:all 0.2s}
+.auth-tab.active{background:var(--surface3);color:var(--text)}
+.auth-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.auth-field{margin-bottom:13px}
+.auth-field label{font-size:11.5px;color:var(--muted);margin-bottom:5px;display:block;text-transform:uppercase;letter-spacing:0.3px}
+.auth-field input,.auth-field select{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:11px 13px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13.5px;outline:none;transition:border-color 0.2s}
+.auth-field select option{background:var(--surface2);color:var(--text)}
+.auth-field input:focus,.auth-field select:focus{border-color:var(--accent)}
+.auth-field input::placeholder{color:var(--muted2)}
+.auth-msg{font-size:12.5px;border-radius:8px;padding:9px 12px;margin-bottom:12px;display:none}
+.auth-msg.err{color:var(--danger);background:rgba(224,112,112,0.08);border:1px solid rgba(224,112,112,0.2)}
+.auth-msg.ok{color:var(--accent3);background:rgba(125,211,168,0.08);border:1px solid rgba(125,211,168,0.2)}
+.auth-msg.show{display:block}
+.auth-footer{text-align:center;font-size:12px;color:var(--muted2);margin-top:14px}
+.auth-footer span{color:var(--accent);cursor:pointer}
+.auth-footer span:hover{opacity:0.8}
 </style>
 </head>
 <body>
 
 <!-- ══ SCREEN 1: WELCOME ══ -->
-<div class="screen" id="screen-welcome">
+<div class="screen hidden" id="screen-welcome">
   <div class="logo-big">Mentor<span>AI</span></div>
   <p class="tagline">Your personal AI mentor that truly knows you — your personality, your goals, your pace.</p>
   <div class="floating-tags">
@@ -261,9 +286,59 @@ pointer-events:none;z-index:0}
     <span class="ftag">🎭 Mentor Personas</span>
     <span class="ftag">🎙 Voice Input</span>
   </div>
-  <button class="btn-primary" onclick="goTo('screen-onboard')">Begin Your Journey →</button>
-  <br/><br/>
-  <button class="btn-ghost" onclick="loadReturning()">I've been here before</button>
+  <button class="btn-primary" onclick="goTo('screen-auth')">Begin Your Journey →</button>
+</div>
+
+<!-- ══ AUTH: SIGN IN / SIGN UP ══ -->
+<div class="screen hidden" id="screen-auth">
+  <div class="auth-card">
+    <div class="auth-logo">Mentor<span>AI</span></div>
+    <p class="auth-sub">Your personal AI mentor that truly knows you.</p>
+    <div class="auth-tabs">
+      <button class="auth-tab active" id="tab-login" onclick="switchTab('login')">Sign In</button>
+      <button class="auth-tab" id="tab-signup" onclick="switchTab('signup')">Create Account</button>
+    </div>
+    <div id="auth-msg" class="auth-msg err"></div>
+
+    <!-- SIGNUP ONLY FIELDS -->
+    <div id="signup-fields">
+      <div class="auth-field">
+        <label>Your Name</label>
+        <input type="text" id="auth-name" placeholder="What should we call you?" />
+      </div>
+      <div class="auth-row">
+        <div class="auth-field">
+          <label>Age</label>
+          <input type="number" id="auth-age" placeholder="e.g. 24" min="13" max="80" />
+        </div>
+        <div class="auth-field">
+          <label>Gender</label>
+          <select id="auth-gender">
+            <option value="" disabled selected>Select</option>
+            <option value="Male">Male</option>
+            <option value="Female">Female</option>
+            <option value="Non-binary">Non-binary</option>
+            <option value="Prefer not to say">Prefer not to say</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- COMMON FIELDS -->
+    <div class="auth-field">
+      <label>Email Address</label>
+      <input type="email" id="auth-email" placeholder="you@example.com" />
+    </div>
+    <div class="auth-field">
+      <label>Password</label>
+      <input type="password" id="auth-password" placeholder="Min 6 characters" onkeydown="if(event.key==='Enter')handleAuth()" />
+    </div>
+
+    <button class="btn-primary" id="auth-btn" onclick="handleAuth()" style="width:100%;margin-top:4px">Sign In →</button>
+    <div class="auth-footer" id="auth-footer">
+      Don't have an account? <span onclick="switchTab('signup')">Create one free →</span>
+    </div>
+  </div>
 </div>
 
 <!-- ══ SCREEN 2: ONBOARDING ══ -->
@@ -362,6 +437,7 @@ pointer-events:none;z-index:0}
       <div class="persona-indicator" id="persona-ind">Coach</div>
       <button class="icon-btn" onclick="toggleSettings()" title="Settings">⚙</button>
       <button class="icon-btn" onclick="resetAll()" title="Reset">↺</button>
+      <button class="icon-btn" onclick="signOut()" title="Sign Out" style="color:var(--danger)">⎋</button>
     </div>
   </div>
 
@@ -396,11 +472,186 @@ pointer-events:none;z-index:0}
 
 <script>
 // ═══════════════════════════════════════════════════════════════
+// SUPABASE — AUTH & DATABASE
+// ═══════════════════════════════════════════════════════════════
+const SUPABASE_URL = 'https://odoxoyiyysuukgpdzhvt.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9kb3hveWl5eXN1dWtncGR6aHZ0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNTY5NzksImV4cCI6MjA4NzkzMjk3OX0.sDcg4VmA8n2o0hiLbKJyeqMDcIy_R9EECbIc3ChOMRQ';
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+let currentUser = null;
+
+// ── AUTH TAB SWITCH ──────────────────────────────────────────
+function switchTab(mode){
+  const isLogin = mode === 'login';
+  document.getElementById('tab-login').classList.toggle('active', isLogin);
+  document.getElementById('tab-signup').classList.toggle('active', !isLogin);
+  document.getElementById('signup-fields').style.display = isLogin ? 'none' : 'block';
+  document.getElementById('auth-btn').textContent = isLogin ? 'Sign In →' : 'Create Account →';
+  document.getElementById('auth-footer').innerHTML = isLogin
+    ? "Don't have an account? <span onclick=\"switchTab('signup')\">Create one free →</span>"
+    : "Already have an account? <span onclick=\"switchTab('login')\">Sign in →</span>";
+  showAuthMsg('', '');
+}
+
+function showAuthMsg(msg, type){
+  const el = document.getElementById('auth-msg');
+  el.textContent = msg;
+  el.className = 'auth-msg ' + type + (msg ? ' show' : '');
+}
+
+// ── HANDLE SIGNUP / LOGIN ────────────────────────────────────
+async function handleAuth(){
+  const btn = document.getElementById('auth-btn');
+  const isLogin = document.getElementById('tab-login').classList.contains('active');
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value.trim();
+
+  if(!email || !password){ showAuthMsg('Please fill in all fields.', 'err'); return; }
+  if(password.length < 6){ showAuthMsg('Password must be at least 6 characters.', 'err'); return; }
+
+  btn.textContent = isLogin ? 'Signing in...' : 'Creating account...';
+  btn.disabled = true;
+  showAuthMsg('', '');
+
+  try {
+    if(isLogin){
+      // ── SIGN IN ──
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if(error) throw error;
+      currentUser = data.user;
+      await loadUserProfile();
+    } else {
+      // ── SIGN UP ──
+      const name = document.getElementById('auth-name').value.trim();
+      const age = document.getElementById('auth-age').value.trim();
+      const gender = document.getElementById('auth-gender').value;
+      if(!name){ showAuthMsg('Please enter your name.', 'err'); btn.disabled=false; btn.textContent='Create Account →'; return; }
+      if(!age){ showAuthMsg('Please enter your age.', 'err'); btn.disabled=false; btn.textContent='Create Account →'; return; }
+      if(!gender){ showAuthMsg('Please select your gender.', 'err'); btn.disabled=false; btn.textContent='Create Account →'; return; }
+
+      const { data, error } = await supabase.auth.signUp({ email, password });
+      if(error) throw error;
+      currentUser = data.user;
+
+      // Save basic info to profile — rest filled during onboarding
+      profile.name = name;
+      profile.age = age;
+      profile.gender = gender;
+      profile.keys = { claude:'server', openai:'server', gemini:'server' };
+      profile.xp = 0; profile.level = 1; profile.streak = 1;
+      profile.lastVisit = new Date().toDateString();
+
+      // Create profile row in Supabase
+      await supabase.from('user_profiles').upsert({
+        id: currentUser.id,
+        name, age: parseInt(age), gender,
+        persona: 'coach', xp: 0, level: 1, streak: 1,
+        last_visit: new Date().toDateString()
+      });
+
+      saveProfile();
+      // Go straight to onboarding
+      goTo('screen-onboard');
+      initOnboard();
+      return;
+    }
+  } catch(err) {
+    showAuthMsg(err.message || 'Something went wrong. Try again.', 'err');
+    btn.disabled = false;
+    btn.textContent = isLogin ? 'Sign In →' : 'Create Account →';
+    return;
+  }
+  btn.disabled = false;
+}
+
+// ── LOAD EXISTING USER PROFILE ───────────────────────────────
+async function loadUserProfile(){
+  const { data, error } = await supabase.from('user_profiles').select('*').eq('id', currentUser.id).single();
+  if(error || !data){
+    // New user — go to onboarding
+    goTo('screen-onboard');
+    initOnboard();
+    return;
+  }
+  // Returning user — load their profile
+  profile.name = data.name;
+  profile.age = data.age;
+  profile.gender = data.gender;
+  profile.role = data.role;
+  profile.goal = data.goal;
+  profile.timeline = data.timeline;
+  profile.learnStyle = data.learn_style;
+  profile.personalityType = data.personality_type;
+  profile.personalityEmoji = data.personality_emoji;
+  profile.personalityDesc = data.personality_desc;
+  profile.persona = data.persona || 'coach';
+  profile.traits = data.traits || {};
+  profile.xp = data.xp || 0;
+  profile.level = data.level || 1;
+  profile.streak = data.streak || 0;
+  profile.lastVisit = data.last_visit;
+  profile.keys = { claude:'server', openai:'server', gemini:'server' };
+
+  // Load chat messages
+  const { data: msgs } = await supabase.from('chat_messages')
+    .select('*').eq('user_id', currentUser.id)
+    .order('created_at', { ascending: true }).limit(40);
+  messages = (msgs || []).map(m => ({ role: m.role, content: m.content, model: m.model, reason: m.reason }));
+
+  saveProfile();
+  launchApp();
+}
+
+// ── SAVE PROFILE TO SUPABASE ─────────────────────────────────
+async function saveProfileToSupabase(){
+  if(!currentUser) return;
+  await supabase.from('user_profiles').upsert({
+    id: currentUser.id,
+    name: profile.name,
+    age: profile.age ? parseInt(profile.age) : null,
+    gender: profile.gender,
+    role: profile.role,
+    goal: profile.goal,
+    timeline: profile.timeline,
+    learn_style: profile.learnStyle,
+    personality_type: profile.personalityType,
+    personality_emoji: profile.personalityEmoji,
+    personality_desc: profile.personalityDesc,
+    persona: profile.persona,
+    traits: profile.traits,
+    xp: profile.xp,
+    level: profile.level,
+    streak: profile.streak,
+    last_visit: profile.lastVisit
+  });
+}
+
+// ── SAVE MESSAGE TO SUPABASE ─────────────────────────────────
+async function saveMessageToSupabase(msg){
+  if(!currentUser) return;
+  await supabase.from('chat_messages').insert({
+    user_id: currentUser.id,
+    role: msg.role,
+    content: msg.content,
+    model: msg.model || null,
+    reason: msg.reason || null
+  });
+}
+
+// ── SIGN OUT ─────────────────────────────────────────────────
+async function signOut(){
+  await supabase.auth.signOut();
+  currentUser = null;
+  messages = [];
+  localStorage.clear();
+  location.reload();
+}
+
+// ═══════════════════════════════════════════════════════════════
 // STATE
 // ═══════════════════════════════════════════════════════════════
 const APP_VERSION = '1.0.0'; // Update this when you deploy new versions
 let profile = {
-  name:'', role:'', goal:'', timeline:'',
+  name:'', age:'', gender:'', role:'', goal:'', timeline:'',
   traits:{openness:0,conscientiousness:0,extraversion:0,agreeableness:0,neuroticism:0},
   personalityType:'', personalityEmoji:'', personalityDesc:'',
   persona:'coach',
@@ -507,7 +758,6 @@ function loadReturning(){
 // ONBOARDING
 // ═══════════════════════════════════════════════════════════════
 const ONBOARD_STEPS = [
-  {q:"What's your name?", sub:"Let's make this personal — not another generic AI chat.", type:"text", key:"name", placeholder:"Your first name"},
   {q:"What best describes you right now?", sub:"Be honest. This changes everything about how your mentor advises you.", type:"choice", key:"role", choices:[
     {icon:"🎓",label:"Student"},
     {icon:"💼",label:"Working Professional"},
@@ -610,7 +860,7 @@ function nextOnboard(){
 
 function prevOnboard(){
   if(onboardStep > 0){ onboardStep--; renderOnboardStep(); }
-  else goTo('screen-welcome');
+  else goTo('screen-auth');
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1091,7 +1341,9 @@ async function sendMessage(){
   const hasKey = profile.keys.claude||profile.keys.openai||profile.keys.gemini;
   if(!hasKey){ alert('No API keys found. Please reset and add keys.'); return; }
 
-  messages.push({role:'user',content:text});
+  const userMsg = {role:'user',content:text};
+  messages.push(userMsg);
+  saveMessageToSupabase(userMsg);
   appendBubble('user',text);
   document.getElementById('user-input').value='';
   document.getElementById('user-input').style.height='auto';
@@ -1108,9 +1360,11 @@ async function sendMessage(){
     else reply = await callGemini(messages);
     removeTyping(typId);
     hideRouteStatus();
-    messages.push({role:'assistant',content:reply,model:route.model,reason:route.reason});
+    const aiMsg = {role:'assistant',content:reply,model:route.model,reason:route.reason};
+    messages.push(aiMsg);
     appendBubble('assistant',reply,route.model,route.reason);
     saveMessages();
+    saveMessageToSupabase(aiMsg);
     addXP(15);
     triggerLogIfNeeded();
   }catch(err){
@@ -1263,8 +1517,13 @@ function scrollDown(){document.getElementById('chat-container').scrollTop=docume
 // ═══════════════════════════════════════════════════════════════
 // PERSISTENCE
 // ═══════════════════════════════════════════════════════════════
-function saveProfile(){localStorage.setItem('mentorProfile',JSON.stringify(profile));}
-function saveMessages(){localStorage.setItem('mentorMessages',JSON.stringify(messages.slice(-40)));}
+function saveProfile(){
+  localStorage.setItem('mentorProfile',JSON.stringify(profile));
+  saveProfileToSupabase(); // sync to Supabase silently
+}
+function saveMessages(){
+  localStorage.setItem('mentorMessages',JSON.stringify(messages.slice(-40)));
+}
 
 function toggleSettings(){
   alert("MentorAI v" + APP_VERSION + "\n\nAll AI models (Claude, GPT-4o, Gemini) are connected securely.\nYour profile and progress are saved on this device.\n\nStreak: " + (profile.streak||0) + " days | Level: " + (profile.level||1) + " | XP: " + (profile.xp||0));
@@ -1542,14 +1801,26 @@ ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefa
 // ═══════════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════════
-const saved = localStorage.getItem('mentorProfile');
-if(saved){
-  profile = JSON.parse(saved);
-  // Generate unique session ID
-  profile.sessionId = 'sess_' + Date.now();
-  messages = JSON.parse(localStorage.getItem('mentorMessages')||'[]');
-}
-initOnboard();
+// ── CHECK AUTH STATE ON LOAD ────────────────────────────────
+// Show auth screen by default — Supabase will redirect if already logged in
+document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
+document.getElementById('screen-auth').classList.remove('hidden');
+switchTab('login'); // default to login tab
+
+// Check if user already has an active session
+supabase.auth.getSession().then(({ data: { session } }) => {
+  if(session){
+    currentUser = session.user;
+    loadUserProfile();
+  }
+});
+
+// Listen for auth state changes
+supabase.auth.onAuthStateChange((event, session) => {
+  if(event === 'SIGNED_IN' && session){
+    currentUser = session.user;
+  }
+});
 </script>
 </body>
 </html>
