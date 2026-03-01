@@ -566,9 +566,16 @@ async function handleAuth(){
 
       const { data, error } = await sb.auth.signUp({ email, password });
       if(error) throw error;
-      currentUser = data.user;
 
-      // Save basic info to profile — rest filled during onboarding
+      // Get the user object safely
+      currentUser = data.user || (data.session && data.session.user);
+      if(!currentUser){
+        const signin = await sb.auth.signInWithPassword({ email, password });
+        if(signin.error) throw signin.error;
+        currentUser = signin.data.user;
+      }
+
+      // Save to profile object
       profile.name = name;
       profile.age = age;
       profile.gender = gender;
@@ -576,16 +583,19 @@ async function handleAuth(){
       profile.xp = 0; profile.level = 1; profile.streak = 1;
       profile.lastVisit = new Date().toDateString();
 
-      // Create profile row in Supabase
-      await sb.from('user_profiles').upsert({
+      // Save to Supabase and wait for confirmation
+      const saveResult = await sb.from('user_profiles').upsert({
         id: currentUser.id,
-        name, age: parseInt(age), gender,
+        name: name,
+        age: parseInt(age),
+        gender: gender,
         persona: 'coach', xp: 0, level: 1, streak: 1,
         last_visit: new Date().toDateString()
       });
+      if(saveResult.error) console.error('Profile save error:', saveResult.error);
+      else console.log('New user saved:', name);
 
       saveProfile();
-      // Go straight to onboarding
       goTo('screen-onboard');
       initOnboard();
       return;
@@ -606,7 +616,7 @@ async function loadUserProfile(){
     const { data, error } = await sb.from('user_profiles').select('*').eq('id', currentUser.id).single();
     console.log('📦 Supabase response:', JSON.stringify({data: data ? {name:data.name, personality_type:data.personality_type, role:data.role} : null, error}));
 
-    if(error || !data || !data.name){
+    if(error || !data || (!data.name && !data.personality_type && !data.role)){
       console.log('⚠️ No profile found — going to onboarding');
       goTo('screen-onboard');
       initOnboard();
