@@ -30,7 +30,20 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { model, messages, system, max_tokens } = req.body;
+  const body = req.body || {};
+  const { messages, system, max_tokens } = body;
+  
+  // Smart fallback — if requested model has no key, fall back to openai
+  let model = body.model || 'openai';
+  if (model === 'claude' && !process.env.ANTHROPIC_API_KEY) model = 'openai';
+  if (model === 'gemini' && !process.env.GEMINI_API_KEY) model = 'openai';
+  if (!model || model === 'route') {
+    // Auto-select based on available keys
+    if (process.env.OPENAI_API_KEY) model = 'openai';
+    else if (process.env.ANTHROPIC_API_KEY) model = 'claude';
+    else if (process.env.GEMINI_API_KEY) model = 'gemini';
+    else model = 'openai';
+  }
 
   try {
     let reply = '';
