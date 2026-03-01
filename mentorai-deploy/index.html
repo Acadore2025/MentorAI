@@ -1621,7 +1621,7 @@ function detectStudyIntent(msg){
   if(emotionalContext.some(k => l.includes(k))) return false;
   
   // Only trigger when user is EXPLICITLY asking to study something for THEMSELVES
-  const explicitStudy = ['i want to learn','help me learn','teach me','i want to study','let's study','study with me','my roadmap','learning roadmap','i need to learn','how do i learn','where do i start learning'];
+  const explicitStudy = ['i want to learn','help me learn','teach me','i want to study','lets study','study with me','my roadmap','learning roadmap','i need to learn','how do i learn','where do i start learning'];
   return explicitStudy.some(k => l.includes(k));
 }
 
