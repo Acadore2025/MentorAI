@@ -1,164 +1,345 @@
-// MentorAI — Secure API Proxy
-// All API keys live HERE on the server. Users never see them.
-
-
-// Keyword-based fallback router
-function smartRoute(msg) {
-  const l = msg.toLowerCase();
-  // Only route to models that actually have keys configured
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const hasClaude = !!process.env.ANTHROPIC_API_KEY;
-  const hasGemini = !!process.env.GEMINI_API_KEY;
-
-  if (hasGemini && (l.includes('trend') || l.includes('market') || l.includes('latest') || l.includes('news')))
-    return JSON.stringify({model:'gemini', reason:'Trend query'});
-  if (hasClaude && (l.includes('career') || l.includes('goal') || l.includes('life') || l.includes('feeling') || l.includes('emotion')))
-    return JSON.stringify({model:'claude', reason:'Career/life query'});
-  // Default to first available key
-  if (hasOpenAI) return JSON.stringify({model:'openai', reason:'Auto-selected'});
-  if (hasClaude) return JSON.stringify({model:'claude', reason:'Auto-selected'});
-  if (hasGemini) return JSON.stringify({model:'gemini', reason:'Auto-selected'});
-  return JSON.stringify({model:'openai', reason:'Default'});
-}
+// ============================================================
+// api/chat.js — MentorAI Brain
+// ============================================================
+// Flow:
+// 1. Read student profile (learning style, emotion, level)
+// 2. Detect what student needs (teach / flashcard / practice)
+// 3. Search Pinecone for right content in their style
+// 4. Build teaching prompt combining profile + content
+// 5. AI teaches in the student's OWN way
+// ============================================================
 
 export default async function handler(req, res) {
-  // Allow requests from your Vercel app only
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-
-  const body = req.body || {};
-  const { messages, system, max_tokens } = body;
-  
-  // Smart fallback — if requested model has no key, fall back to openai
-  let model = body.model || 'openai';
-  if (model === 'claude' && !process.env.ANTHROPIC_API_KEY) model = 'openai';
-  if (model === 'gemini' && !process.env.GEMINI_API_KEY) model = 'openai';
-  if (!model || model === 'route') {
-    // Auto-select based on available keys
-    if (process.env.OPENAI_API_KEY) model = 'openai';
-    else if (process.env.ANTHROPIC_API_KEY) model = 'claude';
-    else if (process.env.GEMINI_API_KEY) model = 'gemini';
-    else model = 'openai';
-  }
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
 
   try {
-    let reply = '';
+    const body = req.body;
+    const messages       = body.messages || [];
+    const studentProfile = body.profile  || {};
+    const baseSystem     = body.system   || '';
+    const model          = body.model    || 'openai';
 
-    // ── CLAUDE ──────────────────────────────────────────────
-    if (model === 'claude') {
-      if (!process.env.ANTHROPIC_API_KEY) return res.status(400).json({ error: 'Claude API key not configured on server. Please add ANTHROPIC_API_KEY in Vercel settings.' });
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': process.env.ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01'
-        },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: max_tokens || 1024,
-          system,
-          messages
-        })
-      });
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error?.message || 'Claude API error');
-      }
-      const data = await response.json();
-      reply = data.content[0].text;
+    const userMessage = messages[messages.length - 1]?.content || '';
+
+    // Step 1: Who is this student?
+    const student = extractStudentContext(studentProfile);
+
+    // Step 2: What does this message need?
+    const intent = detectIntent(userMessage);
+
+    // Step 3: Search knowledge base if teaching needed
+    let ragContext = '';
+    if (intent.needsKnowledge) {
+      ragContext = await searchKnowledge(userMessage, student.learning_style, intent.subject, intent.content_type);
     }
 
-    // ── OPENAI ───────────────────────────────────────────────
-    else if (model === 'openai') {
-      if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: 'OpenAI API key not configured on server. Please add OPENAI_API_KEY in Vercel settings.' });
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          max_tokens: max_tokens || 1024,
-          messages: [{ role: 'system', content: system }, ...messages]
-        })
-      });
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error?.message || 'OpenAI API error');
-      }
-      const data = await response.json();
-      reply = data.choices[0].message.content;
-    }
+    // Step 4: Build the full teaching prompt
+    const systemPrompt = buildTeachingPrompt(baseSystem, student, ragContext, intent);
 
-    // ── GEMINI ───────────────────────────────────────────────
-    else if (model === 'gemini') {
-      if (!process.env.GEMINI_API_KEY) return res.status(400).json({ error: 'Gemini API key not configured on server. Please add GEMINI_API_KEY in Vercel settings.' });
-      const contents = messages.map(m => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content }]
-      }));
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            system_instruction: { parts: [{ text: system }] },
-            contents,
-            generationConfig: { maxOutputTokens: max_tokens || 1024 }
-          })
-        }
-      );
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error?.message || 'Gemini API error');
-      }
-      const data = await response.json();
-      reply = data.candidates[0].content.parts[0].text;
-    }
+    // Step 5: Call AI
+    const response = await callAI(model, messages, systemPrompt);
 
-    // ── ROUTER — uses best available key ─────────────────────
-    else if (model === 'router') {
-      const userMsg = messages[0]?.content || '';
-      if (process.env.ANTHROPIC_API_KEY) {
-        try {
-          const r = await fetch('https://api.anthropic.com/v1/messages', {
-            method:'POST',
-            headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},
-            body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:80,system,messages})
-          });
-          if(r.ok){ const d=await r.json(); reply=d.content[0].text; }
-          else reply = smartRoute(userMsg);
-        } catch(e){ reply = smartRoute(userMsg); }
-      } else if (process.env.OPENAI_API_KEY) {
-        try {
-          const r = await fetch('https://api.openai.com/v1/chat/completions', {
-            method:'POST',
-            headers:{'Content-Type':'application/json','Authorization':`Bearer ${process.env.OPENAI_API_KEY}`},
-            body:JSON.stringify({model:'gpt-4o-mini',max_tokens:80,messages:[{role:'system',content:system},...messages]})
-          });
-          if(r.ok){ const d=await r.json(); reply=d.choices[0].message.content; }
-          else reply = smartRoute(userMsg);
-        } catch(e){ reply = smartRoute(userMsg); }
-      } else {
-        reply = smartRoute(userMsg);
-      }
-    }
+    return res.status(200).json(response);
 
-    else {
-      return res.status(400).json({ error: 'Unknown model: ' + model });
-    }
-
-    return res.status(200).json({ reply });
-
-  } catch (error) {
-    console.error('API Error:', error.message);
-    return res.status(500).json({ error: error.message });
+  } catch (err) {
+    console.error('Chat error:', err);
+    return res.status(500).json({ error: err.message });
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// WHO IS THIS STUDENT
+// ─────────────────────────────────────────────────────────────
+function extractStudentContext(profile) {
+  const personalityToStyle = {
+    'The Explorer':    'hands_on',
+    'The Achiever':    'logical',
+    'The Connector':   'story',
+    'The Overthinker': 'logical',
+    'The Grower':      'visual',
+    'The Dreamer':     'story',
+    'The Analyst':     'logical',
+    'The Creator':     'visual'
+  };
+
+  return {
+    name:            profile.name             || 'Student',
+    learning_style:  profile.learning_style   || personalityToStyle[profile.personality_type] || 'visual',
+    personality:     profile.personality_type || 'The Grower',
+    level:           profile.academic_level   || 'Class 11',
+    exam_target:     profile.exam_target      || 'CBSE',
+    emotion:         profile.current_emotion  || 'neutral',
+    weak_subjects:   profile.weak_subjects    || [],
+    strong_subjects: profile.strong_subjects  || []
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// WHAT DOES THIS MESSAGE NEED
+// ─────────────────────────────────────────────────────────────
+function detectIntent(message) {
+  const msg = message.toLowerCase();
+
+  const isTeaching  = ['explain','teach','what is','how does','tell me','understand','define','concept','show me','what are'].some(k => msg.includes(k));
+  const isFlashcard = ['flashcard','quiz me','test me','quick revision','revise'].some(k => msg.includes(k));
+  const isPractice  = ['practice','question','problem','solve','exercise','example','give me a'].some(k => msg.includes(k));
+  const isEmotional = ['stressed','anxious','scared','worried','overwhelmed','tired','frustrated','can\'t focus'].some(k => msg.includes(k));
+
+  let subject = null;
+  if (['physics','newton','force','motion','electricity','light','pressure'].some(k => msg.includes(k))) subject = 'Physics';
+  if (['chemistry','atom','reaction','acid','base','periodic','molecule'].some(k => msg.includes(k))) subject = 'Chemistry';
+  if (['biology','cell','photosynthesis','gene','evolution','organ'].some(k => msg.includes(k))) subject = 'Biology';
+  if (['math','algebra','percentage','trigonometry','calculus','geometry','statistics'].some(k => msg.includes(k))) subject = 'Mathematics';
+  if (['cat','mba','reasoning','aptitude','seating','arrangement','data interpretation'].some(k => msg.includes(k))) subject = 'CAT / MBA Preparation';
+
+  return {
+    needsKnowledge: isTeaching || isFlashcard || isPractice,
+    wantsFlashcards: isFlashcard,
+    wantsPractice:   isPractice,
+    isEmotional,
+    subject,
+    content_type: isFlashcard ? 'flashcards' : isPractice ? 'practice' : 'teaching'
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// SEARCH PINECONE FOR RIGHT CONTENT
+// ─────────────────────────────────────────────────────────────
+async function searchKnowledge(query, learning_style, subject, content_type) {
+  try {
+    const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
+    const PINECONE_HOST    = process.env.PINECONE_HOST;
+    if (!PINECONE_API_KEY || !PINECONE_HOST) return '';
+
+    const styleWords = {
+      visual:   'visual diagram draw picture see',
+      hands_on: 'experiment practical hands-on activity try',
+      story:    'story narrative history tell explain',
+      logical:  'logical proof formula derive step-by-step'
+    }[learning_style] || '';
+
+    const enrichedQuery = `${query} ${styleWords} ${subject || ''}`.trim();
+
+    const searchRes = await fetch(`${PINECONE_HOST}/records/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Api-Key': PINECONE_API_KEY },
+      body: JSON.stringify({
+        namespace: 'teaching-content',
+        query: { inputs: { text: enrichedQuery }, top_k: 8 },
+        fields: ['text', 'subject', 'topic', 'learning_style', 'content_type']
+      })
+    });
+
+    const data = await searchRes.json();
+    const hits = data.result?.hits || data.matches || [];
+    if (hits.length === 0) return '';
+
+    // Boost results that match student's learning style
+    const ranked = hits
+      .map(h => ({
+        ...h,
+        score: (h._score || 0) +
+               (h.fields?.learning_style === learning_style ? 0.5 : 0) +
+               (h.fields?.content_type   === content_type   ? 0.3 : 0)
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 4);
+
+    const styleLabel = {
+      visual:   'Visual learner — loves diagrams and pictures',
+      hands_on: 'Hands-on learner — needs experiments and real activities',
+      story:    'Story learner — connects through narratives and history',
+      logical:  'Logical learner — wants proofs and step-by-step reasoning'
+    }[learning_style] || 'Visual learner';
+
+    return `STUDENT'S LEARNING STYLE: ${styleLabel}
+
+RETRIEVED KNOWLEDGE (use this content — deliver in their learning style):
+${ranked.map((h, i) => `[${i+1}] ${h.fields?.topic || ''} (${h.fields?.content_type || ''})\n${h.fields?.text || h.metadata?.text || ''}`).join('\n\n---\n\n')}`;
+
+  } catch (err) {
+    console.warn('Pinecone search failed:', err.message);
+    return '';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// BUILD THE COMPLETE TEACHING PROMPT
+// This is the heart of MentorAI
+// ─────────────────────────────────────────────────────────────
+function buildTeachingPrompt(baseSystem, student, ragContext, intent) {
+
+  const styleInstructions = {
+    visual: `TEACHING STYLE — VISUAL LEARNER:
+• Start by painting a clear mental image: "Picture this..." or "Imagine you can see..."
+• Use diagrams described in words: arrows, boxes, relationships
+• Use tables to compare concepts side by side
+• Make the invisible visible — describe what things LOOK like`,
+
+    hands_on: `TEACHING STYLE — HANDS-ON LEARNER:
+• Start with something they can DO right now: "Try this...", "Do this experiment..."
+• Give the experience FIRST — concept explanation comes AFTER they feel it
+• Connect every abstract idea to something physical, touchable, testable
+• Examples: coins, everyday objects, their own body, things at home`,
+
+    story: `TEACHING STYLE — STORY LEARNER:
+• Start with a story, real person, or historical moment — ALWAYS
+• "In 1687, Newton was sitting..." / "Imagine you are a merchant in Venice..."
+• Make them FEEL part of the narrative before introducing the concept
+• Science and math happen to PEOPLE in PLACES — make it human`,
+
+    logical: `TEACHING STYLE — LOGICAL LEARNER:
+• Start with a clean definition or first principle
+• Show every derivation step — no skipping, no hand-waving
+• Use: "Let's prove this formally..." / "From first principles..."
+• Connect to mathematical structures, exceptions, and deeper implications`
+  };
+
+  const emotionGuides = {
+    stressed:   'Student is STRESSED. Acknowledge briefly. Keep explanation short. Break into tiny steps. Extra encouragement.',
+    anxious:    'Student is ANXIOUS. Be very gentle. Go slowly. Celebrate every small understanding.',
+    frustrated: 'Student is FRUSTRATED. Acknowledge the difficulty. Try a COMPLETELY fresh angle — not same explanation again.',
+    confused:   'Student is CONFUSED. Start from absolute basics. Assume zero prior knowledge. Build slowly.',
+    curious:    'Student is CURIOUS — best state! Go deeper. Add fascinating connections. Make it exciting.',
+    excited:    'Student is EXCITED! Match energy. Keep it dynamic. Move fast but thoroughly.',
+    neutral:    'Normal engagement. Warm, clear, conversational.'
+  };
+
+  const deliveryFormats = {
+    flashcards: `DELIVERY: Flashcard mode.
+Format each card as:
+🃏 Q: [question]
+✅ A: [answer]
+Give 5 flashcards. After all 5 ask: "Want 5 more or shall we practice with questions?"`,
+
+    practice: `DELIVERY: Practice mode.
+1. Give ONE practice problem at their level
+2. Let them attempt (end with "Try it — what do you get?")
+3. After they respond, walk through full solution step by step
+4. End with one slightly harder follow-up`,
+
+    teaching: `DELIVERY: Teaching mode.
+1. HOOK (1-2 sentences in their learning style — grab attention)
+2. CORE CONCEPT (explained in their style — not textbook language)
+3. REAL WORLD CONNECTION (something they can relate to personally)
+4. CHECK IN: End with "Does that click? Or should we try a different angle?"`
+  };
+
+  const deliveryFormat = deliveryFormats[intent.content_type] || deliveryFormats.teaching;
+  const styleGuide     = styleInstructions[student.learning_style] || styleInstructions.visual;
+  const emotionGuide   = emotionGuides[student.emotion?.toLowerCase()] || emotionGuides.neutral;
+
+  let prompt = `${baseSystem}
+
+════════════════════════════════════════
+STUDENT PROFILE — READ THIS FIRST
+════════════════════════════════════════
+Name: ${student.name}
+Learning Style: ${student.learning_style.toUpperCase()} ← MOST IMPORTANT
+Personality: ${student.personality}
+Level: ${student.level}
+Target Exam: ${student.exam_target}
+Emotion Right Now: ${student.emotion}
+Weak Areas: ${student.weak_subjects.join(', ') || 'None specified'}
+
+════════════════════════════════════════
+EMOTION GUIDANCE
+════════════════════════════════════════
+${emotionGuide}
+
+════════════════════════════════════════
+${styleGuide}
+
+════════════════════════════════════════
+${deliveryFormat}
+════════════════════════════════════════
+
+NON-NEGOTIABLE RULES:
+1. NEVER start with a textbook definition
+2. ALWAYS start with their learning style hook
+3. Use ${student.name}'s name at least once naturally
+4. If confused — try a DIFFERENT angle, not the same explanation
+5. You are their personal mentor — warm, patient, specific to THEM
+6. Keep responses focused — do not overwhelm with too much at once`;
+
+  if (ragContext) {
+    prompt += `
+
+════════════════════════════════════════
+KNOWLEDGE BASE — YOUR TEACHING MATERIAL
+════════════════════════════════════════
+${ragContext}
+
+⚠️ USE the knowledge above as your source.
+⚠️ TRANSFORM it into ${student.name}'s learning style — do NOT copy verbatim.
+⚠️ Deliver it the way a ${student.learning_style} learner needs it.`;
+  }
+
+  return prompt;
+}
+
+// ─────────────────────────────────────────────────────────────
+// AI MODEL CALLS
+// ─────────────────────────────────────────────────────────────
+async function callAI(model, messages, system) {
+  if (model === 'claude') return callClaude(messages, system);
+  if (model === 'gemini') return callGemini(messages, system);
+  return callOpenAI(messages, system);
+}
+
+async function callOpenAI(messages, system) {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) throw new Error('OPENAI_API_KEY not configured');
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'system', content: system }, ...messages],
+      max_tokens: 1200,
+      temperature: 0.7
+    })
+  });
+
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  return { content: data.choices[0].message.content, model: 'openai', usage: data.usage };
+}
+
+async function callClaude(messages, system) {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) throw new Error('ANTHROPIC_API_KEY not configured');
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model: 'claude-3-5-haiku-20241022', max_tokens: 1200, system, messages })
+  });
+
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  return { content: data.content[0].text, model: 'claude', usage: data.usage };
+}
+
+async function callGemini(messages, system) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new Error('GEMINI_API_KEY not configured');
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: system }] },
+        contents: messages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
+        generationConfig: { maxOutputTokens: 1200, temperature: 0.7 }
+      })
+    }
+  );
+
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  return { content: data.candidates[0].content.parts[0].text, model: 'gemini' };
 }
