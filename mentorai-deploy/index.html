@@ -1977,7 +1977,7 @@ let adminKeyBuffer = '';
 // Secret keyboard shortcut: type "admin" anywhere to trigger password prompt
 document.addEventListener('keydown', e=>{
   if(document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT') return;
-  adminKeyBuffer += e.key.toLowerCase();
+  adminKeyBuffer += (e.key || '').toLowerCase();
   if(adminKeyBuffer.length > 5) adminKeyBuffer = adminKeyBuffer.slice(-5);
   if(adminKeyBuffer === 'admin') openAdminPanel();
 });
