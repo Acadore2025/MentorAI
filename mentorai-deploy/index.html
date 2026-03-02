@@ -1745,12 +1745,22 @@ async function callProxy(model, msgs){
       model,
       messages: msgs.map(m=>({role:m.role, content:m.content})),
       system: buildSystemPrompt(),
-      max_tokens: 1024
+      max_tokens: 1024,
+      profile: {
+        name:             profile.name             || '',
+        personality_type: profile.personalityType  || 'The Grower',
+        learning_style:   profile.learnStyle       || 'visual',
+        academic_level:   profile.role             || 'Student',
+        exam_target:      profile.goal             || 'CBSE',
+        current_emotion:  profile.currentEmotion   || 'neutral',
+        weak_subjects:    profile.weakSubjects      || [],
+        strong_subjects:  profile.strongSubjects    || []
+      }
     })
   });
   if(!res.ok){ const e=await res.json(); throw new Error(e.error||'Server error'); }
   const data = await res.json();
-  return data.reply;
+  return data.content || data.reply || '';
 }
 
 async function callClaude(msgs){ return callProxy('claude', msgs); }
