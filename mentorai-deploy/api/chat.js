@@ -29,8 +29,8 @@ export default async function handler(req, res) {
     // Step 1: Who is this student?
     const student = extractStudentContext(studentProfile);
 
-    // Step 2: What does this message need?
-    const intent = detectIntent(userMessage);
+    // Step 2: Agent routes the message intelligently
+    const intent = detectIntent(userMessage, student, messages);
 
     // Step 2b: Auto-detect emotion from message
     const emotionData = detectEmotionFromMessage(userMessage, messages.slice(-4));
@@ -132,58 +132,150 @@ function extractStudentContext(profile) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// WHAT DOES THIS MESSAGE NEED
+// LANGGRAPH-STYLE AGENT ROUTER
+// Analyses full context — decides which tools to run + order
+// Much smarter than keyword matching
 // ─────────────────────────────────────────────────────────────
-function detectIntent(message) {
-  const msg = message.toLowerCase();
+function detectIntent(message, student = {}, history = []) {
+  const msg = message.toLowerCase().trim();
 
-  const isTeaching  = ['explain','teach','what is','how does','tell me','understand','define','concept','show me','what are'].some(k => msg.includes(k));
-  const isFlashcard = ['flashcard','quiz me','test me','quick revision','revise'].some(k => msg.includes(k));
-  const isPractice  = ['practice','question','problem','solve','exercise','example','give me a'].some(k => msg.includes(k));
-  const isEmotional = ['stressed','anxious','scared','worried','overwhelmed','tired','frustrated','can\'t focus'].some(k => msg.includes(k));
-
-  // Detect if web search is needed
-  const webSearchKeywords = [
-    // Time-based
-    'today','yesterday','this week','this month','this year',
-    'latest','recent','current','now','right now','new',
-    '2024','2025','2026',
-    // News & events
-    'news','happened','update','announce','launch','release',
-    'who is','who won','who became','who got','who is the',
-    // Exams & results
-    'exam date','notification','result','cutoff','vacancy','recruitment',
-    'admit card','syllabus change','new pattern','upsc 2','ssc 2',
-    'ibps','sbi po','neet 2','jee 2','cat 2','gate 2',
-    // Government & policy
-    'election','government','policy','scheme','budget','parliament',
-    'prime minister','president','minister','bill','act passed',
-    // Economy & finance
-    'price','rate','repo rate','inflation','gdp','rbi','sebi',
-    'stock','market','sensex','nifty','rupee','dollar',
-    // Sports & entertainment
-    'ipl','cricket','football','olympics','world cup','match',
-    // General knowledge queries
-    'how many','how much','when did','when was','where is',
-    'what happened','tell me about recent','any news'
-  ];
-  const needsWebSearch = webSearchKeywords.some(k => msg.includes(k));
-
+  // ── SUBJECT DETECTION ─────────────────────────────────────
   let subject = null;
-  if (['physics','newton','force','motion','electricity','light','pressure'].some(k => msg.includes(k))) subject = 'Physics';
-  if (['chemistry','atom','reaction','acid','base','periodic','molecule'].some(k => msg.includes(k))) subject = 'Chemistry';
-  if (['biology','cell','photosynthesis','gene','evolution','organ'].some(k => msg.includes(k))) subject = 'Biology';
-  if (['math','algebra','percentage','trigonometry','calculus','geometry','statistics'].some(k => msg.includes(k))) subject = 'Mathematics';
-  if (['cat','mba','reasoning','aptitude','seating','arrangement','data interpretation'].some(k => msg.includes(k))) subject = 'CAT / MBA Preparation';
+  const subjectMap = {
+    'Physics':               ['physics','newton','force','motion','velocity','acceleration','electricity','magnetism','light','optics','pressure','thermodynamics','quantum','wave','energy','power','momentum','gravitation'],
+    'Chemistry':             ['chemistry','atom','reaction','acid','base','periodic','molecule','bond','element','compound','organic','inorganic','mole','oxidation','reduction','electrode','catalyst'],
+    'Biology':               ['biology','cell','photosynthesis','gene','dna','rna','evolution','organ','tissue','enzyme','hormone','ecosystem','nutrition','respiration','reproduction'],
+    'Mathematics':           ['math','maths','algebra','percentage','trigonometry','calculus','geometry','statistics','probability','matrix','derivative','integral','equation','polynomial','sequence','series'],
+    'CAT / MBA Preparation': ['cat','mba','reasoning','aptitude','seating','arrangement','data interpretation','logical','verbal','quant','di','lr','va','rc'],
+    'UPSC':                  ['upsc','ias','ips','polity','constitution','history','geography','economy','governance','international','current affairs','prelims','mains'],
+    'SSC':                   ['ssc','cgl','chsl','gd','constable','quantitative','english grammar','general awareness'],
+    'Banking':               ['banking','ibps','sbi','rbi','po','clerk','financial awareness','banking awareness','money market']
+  };
+
+  for (const [sub, keywords] of Object.entries(subjectMap)) {
+    if (keywords.some(k => msg.includes(k))) { subject = sub; break; }
+  }
+
+  // ── INTENT SIGNALS ────────────────────────────────────────
+  const signals = {
+    // Teaching signals
+    wantsExplanation: ['explain','teach','what is','how does','tell me about','help me understand',
+      'define','concept','show me','what are','how do','why does','describe','elaborate','break down'].some(k => msg.includes(k)),
+
+    // Flashcard signals
+    wantsFlashcards: ['flashcard','flash card','quiz me','test me','quick revision','revise',
+      'rapid fire','quick test','memory test','recall'].some(k => msg.includes(k)),
+
+    // Practice signals
+    wantsPractice: ['practice','give me a question','problem','solve','exercise',
+      'example question','mock','attempt','try me','challenge me','harder question',
+      'previous year','pyq','past paper'].some(k => msg.includes(k)),
+
+    // Emotional signals
+    needsSupport: ['stressed','anxious','scared','worried','overwhelmed','tired',
+      'frustrated','can't focus','giving up','hopeless','demotivated','no motivation',
+      'what's the point','want to quit','lost','help'].some(k => msg.includes(k)),
+
+    // Comparison / decision signals  
+    wantsComparison: ['difference between','compare','vs','versus','which is better',
+      'what's better','distinguish','contrast','similarities'].some(k => msg.includes(k)),
+
+    // Summary signals
+    wantsSummary: ['summarize','summary','overview','brief','tldr','in short',
+      'key points','main points','gist','recap'].some(k => msg.includes(k)),
+
+    // Study plan signals
+    wantsStudyPlan: ['study plan','schedule','timetable','how to prepare','preparation plan',
+      'strategy','roadmap','how many days','how long to prepare'].some(k => msg.includes(k)),
+
+    // Web search signals
+    needsWebSearch: [
+      'today','yesterday','this week','this month','this year',
+      'latest','recent','current','now','right now',
+      '2024','2025','2026',
+      'news','happened','update','announced','launched',
+      'who is','who won','who became','who got',
+      'exam date','notification','result','cutoff','vacancy','recruitment',
+      'admit card','syllabus 2025','new pattern',
+      'upsc 2025','ssc 2025','ibps 2025','sbi po 2025','neet 2025','jee 2025','cat 2025',
+      'election','government policy','new scheme','budget 2025','parliament',
+      'prime minister','president','minister','new bill',
+      'repo rate','inflation rate','gdp growth','rbi policy','sebi',
+      'stock market','sensex','nifty','rupee','dollar rate',
+      'ipl','cricket','football','olympics','world cup',
+      'how many','what happened','any news','tell me about recent'
+    ].some(k => msg.includes(k))
+  };
+
+  // ── CONTEXT-AWARE ROUTING ─────────────────────────────────
+  // Check conversation history for context
+  const recentHistory = history.slice(-4).map(m => (m.content || '').toLowerCase());
+  const isFollowUp = recentHistory.length > 0;
+  const prevWasPractice = recentHistory.some(m => m.includes('try') || m.includes('solve') || m.includes('attempt'));
+
+  // ── MULTI-TOOL DECISION ENGINE ────────────────────────────
+  // Unlike simple keyword matching, this decides COMBINATIONS
+
+  // SCENARIO 1: Emotional + Academic = support first, then teach
+  const needsEmotionalFirst = signals.needsSupport && (signals.wantsExplanation || subject);
+
+  // SCENARIO 2: Web + Teaching = search live data + explain concept
+  const needsWebAndTeach = signals.needsWebSearch && (signals.wantsExplanation || subject);
+
+  // SCENARIO 3: Exam panic = rapid revision mode
+  const isExamPanic = msg.includes('exam') && (msg.includes('tomorrow') || msg.includes('today') || msg.includes('tonight'));
+
+  // SCENARIO 4: Follow-up after practice = check answer + next problem
+  const isAnswerAttempt = prevWasPractice && !signals.wantsExplanation && msg.length < 100;
+
+  // SCENARIO 5: Pure conversation (greeting, thanks, general chat)
+  const isPureConversation = !subject && !signals.wantsExplanation && !signals.wantsPractice &&
+    !signals.wantsFlashcards && !signals.needsWebSearch && !signals.needsSupport &&
+    ['hi','hello','hey','thanks','thank you','ok','okay','great','nice','cool','bye'].some(k => msg.includes(k));
+
+  // ── DETERMINE PRIMARY MODE ────────────────────────────────
+  let mode = 'teaching'; // default
+  if (signals.wantsFlashcards)  mode = 'flashcards';
+  if (signals.wantsPractice)    mode = 'practice';
+  if (signals.wantsSummary)     mode = 'summary';
+  if (signals.wantsStudyPlan)   mode = 'study_plan';
+  if (signals.wantsComparison)  mode = 'comparison';
+  if (signals.needsSupport && !subject) mode = 'emotional_support';
+  if (isExamPanic)              mode = 'exam_panic';
+  if (isAnswerAttempt)          mode = 'check_answer';
+  if (isPureConversation)       mode = 'conversation';
+
+  // ── BUILD TOOL SEQUENCE ───────────────────────────────────
+  const tools = [];
+  if (signals.needsWebSearch)                                    tools.push('web_search');
+  if (signals.wantsExplanation || subject || signals.wantsPractice || signals.wantsFlashcards) tools.push('knowledge_base');
+  if (signals.needsSupport || needsEmotionalFirst)               tools.push('emotional_support');
+
+  console.log('🧠 Agent decision:', { mode, subject, tools, signals: Object.keys(signals).filter(k => signals[k]) });
 
   return {
-    needsKnowledge: isTeaching || isFlashcard || isPractice,
-    needsWebSearch,
-    wantsFlashcards: isFlashcard,
-    wantsPractice:   isPractice,
-    isEmotional,
+    // Core flags
+    needsKnowledge:  tools.includes('knowledge_base'),
+    needsWebSearch:  tools.includes('web_search'),
+    needsEmotionalFirst,
+    needsWebAndTeach,
+    isExamPanic,
+    isAnswerAttempt,
+
+    // Mode
+    mode,
+    content_type: mode === 'flashcards' ? 'flashcards' : mode === 'practice' ? 'practice' : 'teaching',
+
+    // Subject
     subject,
-    content_type: isFlashcard ? 'flashcards' : isPractice ? 'practice' : 'teaching'
+
+    // Tools to run
+    tools,
+
+    // Legacy flags
+    wantsFlashcards: signals.wantsFlashcards,
+    wantsPractice:   signals.wantsPractice,
+    isEmotional:     signals.needsSupport
   };
 }
 
@@ -483,10 +575,57 @@ Give 5 flashcards. After all 5 ask: "Want 5 more or shall we practice with quest
 1. HOOK (1-2 sentences in their learning style — grab attention)
 2. CORE CONCEPT (explained in their style — not textbook language)
 3. REAL WORLD CONNECTION (something they can relate to personally)
-4. CHECK IN: End with "Does that click? Or should we try a different angle?"`
+4. CHECK IN: End with "Does that click? Or should we try a different angle?"`,
+
+    emotional_support: `DELIVERY: Emotional support mode.
+1. ACKNOWLEDGE — reflect back exactly what they said they're feeling
+2. NORMALISE — tell them this is common, they're not alone
+3. REFRAME — one perspective shift
+4. GENTLE NEXT STEP — one tiny action they can take right now
+Never jump to solutions before they feel heard.`,
+
+    exam_panic: `DELIVERY: Exam panic mode. TIME IS CRITICAL.
+1. ONE calm sentence: acknowledge the pressure
+2. "Here's your game plan for the next [X] hours:"
+3. Top 5 most important topics ONLY — no more
+4. For each topic: ONE key formula/concept in one line
+5. End with: "You've got this. Focus beats panic every time."
+Keep entire response under 200 words. No deep explanations.`,
+
+    summary: `DELIVERY: Summary mode.
+Give a clean, scannable summary:
+📌 KEY POINTS (3-5 bullets max)
+🎯 CORE IDEA (one sentence)
+💡 REMEMBER THIS (one memorable hook)`,
+
+    study_plan: `DELIVERY: Study plan mode.
+Build a realistic plan:
+📅 TIMELINE: [based on their exam/goal]
+📚 WEEK BY WEEK breakdown
+⏰ DAILY time commitment (be realistic, not aspirational)
+✅ MILESTONES to track progress
+Start by asking: what's your exam date and daily available hours?`,
+
+    comparison: `DELIVERY: Comparison mode.
+Use a clear table or parallel structure:
+[CONCEPT A] vs [CONCEPT B]
+- Key difference 1
+- Key difference 2  
+- When to use which
+End with a memory trick to never confuse them again.`,
+
+    check_answer: `DELIVERY: Answer check mode.
+1. Confirm if their answer is correct or not — directly
+2. If wrong: show exactly where they went wrong (not just the right answer)
+3. Walk through the correct method step by step
+4. Give one more similar problem to solidify`,
+
+    conversation: `DELIVERY: Conversational mode.
+Respond naturally and warmly. No teaching structure needed.
+Keep it brief and human. Ask what they want to work on next.`
   };
 
-  const deliveryFormat = deliveryFormats[intent.content_type] || deliveryFormats.teaching;
+  const deliveryFormat = deliveryFormats[intent.mode] || deliveryFormats[intent.content_type] || deliveryFormats.teaching;
   const styleGuide     = styleInstructions[student.learning_style] || styleInstructions.visual;
   const emotionGuide   = emotionGuides[student.emotion?.toLowerCase()] || emotionGuides.neutral;
   const specialInstruction = student.emotionAdjustments?.specialInstruction || '';
