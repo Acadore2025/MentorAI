@@ -33,8 +33,14 @@ export default async function handler(req, res) {
       ragContext = await searchKnowledge(userMessage, student.learning_style, intent.subject, intent.content_type);
     }
 
+    // Step 3b: Web search if current affairs / news needed
+    let webContext = '';
+    if (intent.needsWebSearch) {
+      webContext = await searchWeb(userMessage);
+    }
+
     // Step 4: Build the full teaching prompt
-    const systemPrompt = buildTeachingPrompt(baseSystem, student, ragContext, intent);
+    const systemPrompt = buildTeachingPrompt(baseSystem, student, ragContext, intent, webContext);
 
     // Step 5: Call AI
     const response = await callAI(model, messages, systemPrompt);
@@ -85,6 +91,16 @@ function detectIntent(message) {
   const isPractice  = ['practice','question','problem','solve','exercise','example','give me a'].some(k => msg.includes(k));
   const isEmotional = ['stressed','anxious','scared','worried','overwhelmed','tired','frustrated','can\'t focus'].some(k => msg.includes(k));
 
+  // Detect if web search is needed
+  const webSearchKeywords = [
+    'current affairs','today','latest','recent','news','2024','2025',
+    'exam date','notification','result','cutoff','vacancy','recruitment',
+    'upsc','ssc','ibps','sbi po','neet 2','jee 2','admit card',
+    'who is','who won','election','government','policy','scheme',
+    'price','rate','stock','market','weather','sports','ipl','cricket'
+  ];
+  const needsWebSearch = webSearchKeywords.some(k => msg.includes(k));
+
   let subject = null;
   if (['physics','newton','force','motion','electricity','light','pressure'].some(k => msg.includes(k))) subject = 'Physics';
   if (['chemistry','atom','reaction','acid','base','periodic','molecule'].some(k => msg.includes(k))) subject = 'Chemistry';
@@ -94,6 +110,7 @@ function detectIntent(message) {
 
   return {
     needsKnowledge: isTeaching || isFlashcard || isPractice,
+    needsWebSearch,
     wantsFlashcards: isFlashcard,
     wantsPractice:   isPractice,
     isEmotional,
@@ -125,7 +142,7 @@ async function searchKnowledge(query, learning_style, subject, content_type) {
       headers: { 'Content-Type': 'application/json', 'Api-Key': PINECONE_API_KEY },
       body: JSON.stringify({
         namespace: 'teaching-content',
-        query: { inputs: { text: enrichedQuery }, top_k: 8 },
+        query: { inputs: { chunk_text: enrichedQuery }, top_k: 8 },
         fields: ['text', 'subject', 'topic', 'learning_style', 'content_type']
       })
     });
@@ -155,10 +172,60 @@ async function searchKnowledge(query, learning_style, subject, content_type) {
     return `STUDENT'S LEARNING STYLE: ${styleLabel}
 
 RETRIEVED KNOWLEDGE (use this content — deliver in their learning style):
-${ranked.map((h, i) => `[${i+1}] ${h.fields?.topic || ''} (${h.fields?.content_type || ''})\n${h.fields?.text || h.metadata?.text || ''}`).join('\n\n---\n\n')}`;
+${ranked.map((h, i) => `[${i+1}] ${h.fields?.topic || ''} (${h.fields?.content_type || ''})\n${h.fields?.text || h.fields?.chunk_text || h.metadata?.text || ''}`).join('\n\n---\n\n')}`;
 
   } catch (err) {
     console.warn('Pinecone search failed:', err.message);
+    return '';
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────
+// SEARCH WEB VIA TAVILY
+// Called for current affairs, news, exam notifications etc.
+// ─────────────────────────────────────────────────────────────
+async function searchWeb(query) {
+  try {
+    const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
+    if (!TAVILY_API_KEY) return '';
+
+    const res = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        api_key: TAVILY_API_KEY,
+        query,
+        search_depth: 'basic',
+        max_results: 5,
+        include_answer: true
+      })
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.results) return '';
+
+    const results = data.results || [];
+    let context = `LIVE WEB SEARCH RESULTS for: "${query}"
+
+`;
+
+    if (data.answer) {
+      context += `DIRECT ANSWER: ${data.answer}
+
+`;
+    }
+
+    context += `SOURCES:
+`;
+    results.slice(0, 3).forEach((r, i) => {
+      context += `[${i+1}] ${r.title}\n${(r.content || '').slice(0, 400)}\nURL: ${r.url}\n\n`;
+    });
+
+    return context;
+
+  } catch (err) {
+    console.warn('Web search failed (non-critical):', err.message);
     return '';
   }
 }
@@ -167,7 +234,7 @@ ${ranked.map((h, i) => `[${i+1}] ${h.fields?.topic || ''} (${h.fields?.content_t
 // BUILD THE COMPLETE TEACHING PROMPT
 // This is the heart of MentorAI
 // ─────────────────────────────────────────────────────────────
-function buildTeachingPrompt(baseSystem, student, ragContext, intent) {
+function buildTeachingPrompt(baseSystem, student, ragContext, intent, webContext = '') {
 
   const styleInstructions = {
     visual: `TEACHING STYLE — VISUAL LEARNER:
