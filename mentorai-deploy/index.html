@@ -1689,20 +1689,16 @@ async function sendMessage(){
   
   setLoading(true);
 
-  showRouteStatus('Analyzing your message...');
+  showRouteStatus('Thinking...');
   try{
-    const route = await routeQuery(text);
-    showRouteStatus(`Connecting to ${modelLabel(route.model)} — ${route.reason}`);
     const typId = showTyping();
     let reply;
-    if(route.model==='claude') reply = await callClaude(messages);
-    else if(route.model==='openai') reply = await callOpenAI(messages);
-    else reply = await callGemini(messages);
+    reply = await callOpenAI(messages);
     removeTyping(typId);
     hideRouteStatus();
-    const aiMsg = {role:'assistant',content:reply,model:route.model,reason:route.reason};
+    const aiMsg = {role:'assistant',content:reply,model:'openai',reason:'Powered by Tavily + OpenAI'};
     messages.push(aiMsg);
-    appendBubble('assistant',reply,route.model,route.reason);
+    appendBubble('assistant',reply,'openai','Powered by Tavily + OpenAI');
     saveMessages();
     saveMessageToSupabase(aiMsg);
     addXP(15);
