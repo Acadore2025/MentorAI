@@ -292,6 +292,15 @@ pointer-events:none;z-index:0}
     50% { opacity: 0; }
   }
   .stream-bubble .cursor { margin-left: 2px; }
+
+  /* ── Markdown Tables ── */
+  .tbl-wrap { overflow-x: auto; margin: 12px 0; }
+  .md-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  .md-table th { background: rgba(255,180,50,0.15); color: #f5c842; font-weight: 600; padding: 8px 12px; border: 1px solid rgba(255,255,255,0.1); text-align: left; }
+  .md-table td { padding: 7px 12px; border: 1px solid rgba(255,255,255,0.08); color: #e0e0e0; }
+  .md-table tr:nth-child(even) td { background: rgba(255,255,255,0.03); }
+  .md-table tr:hover td { background: rgba(255,180,50,0.05); }
+
 </style>
 </head>
 <body>
@@ -1890,7 +1899,19 @@ function appendBubble(role,text,model,reason){
 }
 
 function fmt(t){
+  // ── TABLE RENDERING ──────────────────────────────────────
+  t = t.replace(/(\|.+\|\n)(\|[-| :]+\|\n)((\|.+\|\n?)+)/g, (match, header, separator, body) => {
+    const headers = header.split('|').filter(c=>c.trim()).map(c=>`<th>${c.trim()}</th>`).join('');
+    const rows = body.trim().split('\n').map(row => {
+      const cells = row.split('|').filter(c=>c.trim()).map(c=>`<td>${c.trim()}</td>`).join('');
+      return `<tr>${cells}</tr>`;
+    }).join('');
+    return `<div class="tbl-wrap"><table class="md-table"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  });
+
   return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/&lt;(div|table|thead|tbody|tr|th|td|strong|em|h3|li|ul|code|hr|p|br)(.*?)&gt;/g,'<$1$2>')
+    .replace(/&lt;\/(div|table|thead|tbody|tr|th|td|strong|em|h3|li|ul|code|hr|p|br)&gt;/g,'</$1>')
     .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
     .replace(/\*(.+?)\*/g,'<em>$1</em>')
     .replace(/^###\s(.+)$/gm,'<h3>$1</h3>')
