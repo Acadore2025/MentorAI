@@ -59,6 +59,54 @@ export default async function handler(req, res) {
     // Step 4b: If socratic mode — inject instruction directly into user message
     if (intent.mode === 'socratic_intake') {
       const lastMsg = messages[messages.length - 1];
+      const recentExchange = messages.slice(-6).map(m => m.content || '').join(' ').toLowerCase();
+
+      // Figure out what we already know and what to ask next
+      const knowsCompany    = recentExchange.match(/accenture|google|amazon|flipkart|tcs|infosys|wipro|microsoft|meta|startup|mnc/i);
+      const knowsLevel      = recentExchange.match(/beginner|intermediate|senior|years|experience|i know|i dont know|nothing|basics|comfortable/i);
+      const knowsTime       = recentExchange.match(/hours|tonight|all day|few hours|whole day|\d hour/i);
+
+      // Detect what kind of situation this is
+      const isStudyPlan = recentExchange.match(/study plan|make a plan|create a plan|help me prepare|how should i prepare|prepare for/i);
+      const isInterview = recentExchange.match(/interview/i);
+
+      let nextQuestion = '';
+
+      if (isStudyPlan) {
+        const knowsHours    = recentExchange.match(/\d+\s*(hour|hr|hrs|hours)|hour a day|hours a day|per day|daily/i);
+        const knowsDeadline = recentExchange.match(/\d+\s*(day|week|month|year)|by [a-z]+|in [0-9]|deadline|exam date|jee|neet|upsc|cat|gate/i);
+        const knowsWeak     = recentExchange.match(/weak|struggle|bad at|not good|difficult|hard for me|confused about/i);
+
+        if (!knowsHours) {
+          nextQuestion = 'Ask ONLY: how many hours a day can they realistically give to this?';
+        } else if (!knowsDeadline) {
+          nextQuestion = 'Ask ONLY: what is their deadline or target date?';
+        } else if (!knowsWeak) {
+          nextQuestion = 'Ask ONLY: which topics or subjects feel weakest right now?';
+        } else {
+          nextQuestion = 'NOW you have enough context. Build a precise, realistic study plan based on their hours, deadline, and weak areas.';
+        }
+      } else if (isInterview) {
+        if (!knowsCompany) {
+          nextQuestion = 'Ask ONLY: which company is the interview for?';
+        } else if (!knowsLevel) {
+          nextQuestion = 'Ask ONLY: how comfortable are they with the relevant skills right now — beginner, some experience, or solid?';
+        } else if (!knowsTime) {
+          nextQuestion = 'Ask ONLY: how many hours do they have to prepare?';
+        } else {
+          nextQuestion = 'NOW you have enough context. Give a focused, specific preparation plan based on everything they told you.';
+        }
+      } else {
+        // General situation — ask the most important missing piece
+        if (!knowsLevel) {
+          nextQuestion = 'Ask ONLY: what is their current level or experience with this?';
+        } else if (!knowsTime) {
+          nextQuestion = 'Ask ONLY: how much time do they have?';
+        } else {
+          nextQuestion = 'NOW you have enough context. Give targeted, specific help based on everything they told you.';
+        }
+      }
+
       const injected = [
         ...messages.slice(0, -1),
         {
@@ -66,12 +114,10 @@ export default async function handler(req, res) {
           content: `${lastMsg.content}
 
 [SYSTEM OVERRIDE — HIGHEST PRIORITY]:
-Do NOT give advice, tips, or preparation content yet.
-Ask ONLY 1 question — the single most important diagnostic question.
-Do not list topics. Do not give steps. Do not prepare anything.
-Just acknowledge in one sentence and ask ONE question.
-Example: "Nice — which company is it for?"
-Nothing else. One question only.`
+${nextQuestion}
+Do not give a full plan yet unless instructed above.
+Keep response to 2-3 lines maximum.
+One question only — natural, warm, conversational.`
         }
       ];
       messages = injected;
@@ -262,32 +308,45 @@ function detectIntent(message, student = {}, history = []) {
 
   // ── SOCRATIC INTAKE DETECTION ────────────────────────────
   const socraticTriggers = [
+    // Interview
     'interview tomorrow','interview today','interview this week',
     'got an interview','have an interview','i have an interview',
+    // Exam
     'exam tomorrow','exam today','exam this week',
     'test tomorrow','test today','paper tomorrow','viva tomorrow',
+    // Presentation
     'presentation tomorrow','presentation today','demo tomorrow','present tomorrow',
+    // Study plan — needs diagnosis before building
+    'make a study plan','make me a study plan','create a study plan',
+    'study plan','make a plan','create a plan','build a plan',
+    'help me prepare','help me study','how should i prepare',
+    'prepare for','i want to prepare','i need to prepare',
+    // New goal
     'want to learn','want to start','how do i start','where do i begin',
     'i want to become','planning to learn','want to become',
+    // Stuck
     'feeling stuck','dont know what to do','no direction',
     'confused about career','what should i do with',
+    // Startup
     'started a startup','have an idea','building a product','launching soon',
+    // Job
     'got a job offer','job offer','should i join','negotiating salary'
   ];
 
   let socraticMode = socraticTriggers.some(t => msg.includes(t));
 
-  // Skip intake only if already diagnosing THIS topic in last 3 messages
-  const alreadyDiagnosing = history.slice(-3).some(m =>
-    ['what company','which company','how much do you know','what level','how many hours',
-     'which subject','who is the audience','tell me the idea','what role',
-     'how comfortable','what are the two options'].some(t =>
-      (m.content || '').toLowerCase().includes(t)
-    )
+  // Keep socratic mode going until we have enough context
+  // Check if the ORIGINAL situation trigger appeared in recent history
+  const situationInHistory = history.slice(-6).some(m =>
+    socraticTriggers.some(t => (m.content || '').toLowerCase().includes(t))
   );
 
-  // Always trigger socratic intake when situation detected — regardless of history length
-  if (socraticMode && !alreadyDiagnosing) {
+  // Check if we have gathered enough answers (3+ student replies after trigger)
+  const studentRepliesAfterTrigger = history.slice(-6).filter(m => m.role === 'user').length;
+  const hasEnoughContext = studentRepliesAfterTrigger >= 3;
+
+  // Trigger socratic if: situation detected NOW, or situation was recent and not enough context yet
+  if (socraticMode || (situationInHistory && !hasEnoughContext)) {
     mode = 'socratic_intake';
   }
 
@@ -727,6 +786,25 @@ ${styleGuide}
 ${deliveryFormat}
 ════════════════════════════════════════
 
+════════════════════════════════════════
+COMMUNICATION STYLE — NON-NEGOTIABLE
+════════════════════════════════════════
+You communicate like the world's top 1% professionals.
+Your style is modelled after:
+- Clarity of Richard Feynman — explain complex things simply, never talk down
+- Precision of a Harvard professor — every word is chosen deliberately
+- Warmth of a seasoned mentor — you care, and it shows naturally
+- Confidence of a Fortune 500 CEO — direct, no hedging, no fluff
+
+HARD RULES ON LANGUAGE:
+- NEVER use: "certainly", "absolutely", "great question", "of course", "sure thing", "happy to help", "definitely", "fantastic"
+- NEVER start a response with a compliment about the question
+- Speak with authority but stay human and approachable
+- Use real-world analogies to explain abstract concepts
+- Every sentence must add value — if it doesn't, cut it
+- Structure: context → insight → action (when giving advice)
+- In conversation: be brief, warm, direct — like a trusted friend who happens to be an expert
+
 NON-NEGOTIABLE RULES:
 1. NEVER start with a textbook definition
 2. ALWAYS start with their learning style hook
@@ -735,7 +813,22 @@ NON-NEGOTIABLE RULES:
 5. You are their personal mentor — warm, patient, specific to THEM
 6. Keep responses focused — do not overwhelm with too much at once
 7. NEVER say "I don't have access to real-time data" or "my training cutoff" — you have live web search. USE IT.
-8. If web search results are provided below — USE THEM to answer. Always.`;
+8. If web search results are provided below — USE THEM to answer. Always.
+
+CONVERSATION vs CONTENT — CRITICAL DISTINCTION:
+When the student sends a SHORT conversational message (under 15 words, no explicit request for a list or explanation):
+→ NEVER dump bullets, steps, lists, or full plans
+→ Respond conversationally — 2-3 lines MAX
+→ Ask ONE follow-up question or make ONE observation
+→ Think: "What would a smart friend say?" not "What would a textbook say?"
+
+When the student EXPLICITLY asks for content (e.g. "give me 100 questions", "explain", "list all topics", "make a plan"):
+→ THEN give the full structured response
+
+SIMPLE TEST before every response:
+Did they ask for information? → Give information.
+Did they share a situation? → Ask about it first. Help second.
+Are they in a conversation? → Stay in the conversation. Do not lecture.`;
 
   if (ragContext) {
     prompt += `
