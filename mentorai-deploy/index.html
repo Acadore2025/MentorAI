@@ -1766,90 +1766,31 @@ async function routeQuery(msg){
 }
 
 // ── ALL API CALLS GO THROUGH SECURE VERCEL BACKEND ──────────
-// Streaming version — words appear instantly like ChatGPT
+// No API keys in the frontend. Ever.
 async function callProxy(model, msgs){
-  const payload = {
-    model,
-    stream: true,
-    messages: msgs.map(m=>({role:m.role, content:m.content})),
-    system: buildSystemPrompt(),
-    max_tokens: 1024,
-    profile: {
-      name:             profile.name             || '',
-      personality_type: profile.personalityType  || 'The Grower',
-      learning_style:   profile.learnStyle       || 'visual',
-      academic_level:   profile.role             || 'Student',
-      exam_target:      profile.goal             || 'CBSE',
-      current_emotion:  profile.currentEmotion   || 'neutral',
-      weak_subjects:    profile.weakSubjects      || [],
-      strong_subjects:  profile.strongSubjects    || []
-    }
-  };
-
   const res = await fetch('/api/chat', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'text/event-stream'
-    },
-    body: JSON.stringify(payload)
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages: msgs.map(m=>({role:m.role, content:m.content})),
+      system: buildSystemPrompt(),
+      max_tokens: 1024,
+      profile: {
+        name:             profile.name             || '',
+        personality_type: profile.personalityType  || 'The Grower',
+        learning_style:   profile.learnStyle       || 'visual',
+        academic_level:   profile.role             || 'Student',
+        exam_target:      profile.goal             || 'CBSE',
+        current_emotion:  profile.currentEmotion   || 'neutral',
+        weak_subjects:    profile.weakSubjects      || [],
+        strong_subjects:  profile.strongSubjects    || []
+      }
+    })
   });
-
-  // Handle non-ok responses
-  if(!res.ok){
-    const text = await res.text();
-    try { const e = JSON.parse(text); throw new Error(e.error||'Server error'); }
-    catch(e) { throw new Error(text || 'Server error'); }
-  }
-
-  // Check if response is streaming or regular JSON
-  const contentType = res.headers.get('content-type') || '';
-  if (!contentType.includes('event-stream')) {
-    // Fallback: regular JSON response
-    const data = await res.json();
-    return data.content || data.reply || '';
-  }
-
-  // ── Handle streaming response ────────────────────────────
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let fullContent = '';
-  let streamBubble = null;
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop(); // keep incomplete line in buffer
-
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const raw = line.slice(6).trim();
-      if (!raw || raw === '[DONE]') continue;
-
-      try {
-        const data = JSON.parse(raw);
-        if (data.error) throw new Error(data.error);
-
-        if (data.token) {
-          fullContent += data.token;
-          if (!streamBubble) streamBubble = createStreamBubble();
-          updateStreamBubble(streamBubble, fullContent);
-        }
-
-        if (data.done) {
-          if (streamBubble) streamBubble.remove();
-          return data.full || fullContent;
-        }
-      } catch(e) { /* skip malformed chunks */ }
-    }
-  }
-
-  if (streamBubble) streamBubble.remove();
-  return fullContent;
+  if(!res.ok){ const e = await res.json().catch(()=>({})); throw new Error(e.error||'Server error'); }
+  const data = await res.json();
+  return data.content || data.reply || '';
 }
 
 // Create a streaming bubble in the chat
