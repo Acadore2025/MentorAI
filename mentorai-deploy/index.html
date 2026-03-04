@@ -1691,6 +1691,23 @@ async function sendMessage(){
 
   showRouteStatus('Thinking...');
   try{
+    // Detect emotion from message
+    try {
+      const emotionRes = await fetch('/api/emotion', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ message: text, history: messages.slice(-4) })
+      });
+      const emotionData = await emotionRes.json();
+      if (emotionData.detected) {
+        window._lastEmotion = emotionData.emotion;
+        profile.currentEmotion = emotionData.emotion;
+        showRouteStatus(`Detected: ${emotionData.emotion} (${emotionData.confidence}% confidence)`);
+      } else {
+        window._lastEmotion = 'neutral';
+      }
+    } catch(e) { window._lastEmotion = 'neutral'; }
+
     const typId = showTyping();
     let reply;
     reply = await callOpenAI(messages);
@@ -1698,7 +1715,11 @@ async function sendMessage(){
     hideRouteStatus();
     const aiMsg = {role:'assistant',content:reply,model:'openai',reason:'Powered by Tavily + OpenAI'};
     messages.push(aiMsg);
-    appendBubble('assistant',reply,'openai','Powered by Tavily + OpenAI');
+    // Show detected emotion in label if available
+    const emotionLabel = reply && window._lastEmotion && window._lastEmotion !== 'neutral'
+      ? `Powered by Tavily + OpenAI · Detected: ${window._lastEmotion}`
+      : 'Powered by Tavily + OpenAI';
+    appendBubble('assistant',reply,'openai', emotionLabel);
     saveMessages();
     saveMessageToSupabase(aiMsg);
     addXP(15);
