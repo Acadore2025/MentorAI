@@ -161,12 +161,12 @@ function detectIntent(message, student = {}, history = []) {
 
     // Emotional signals
     needsSupport: ['stressed','anxious','scared','worried','overwhelmed','tired',
-      'frustrated','can't focus','giving up','hopeless','demotivated','no motivation',
-      'what's the point','want to quit','lost','help'].some(k => msg.includes(k)),
+      'frustrated','cant focus','giving up','hopeless','demotivated','no motivation',
+      'whats the point','want to quit','lost','help'].some(k => msg.includes(k)),
 
     // Comparison / decision signals  
     wantsComparison: ['difference between','compare','vs','versus','which is better',
-      'what's better','distinguish','contrast','similarities'].some(k => msg.includes(k)),
+      'whats better','distinguish','contrast','similarities'].some(k => msg.includes(k)),
 
     // Summary signals
     wantsSummary: ['summarize','summary','overview','brief','tldr','in short',
