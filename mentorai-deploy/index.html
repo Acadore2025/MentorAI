@@ -1943,7 +1943,7 @@ function fmt(t){
     .replace(/^(.+)$/,'<p>$1</p>');
 }
 
-function modelLabel(m){return{claude:'Claude',openai:'GPT-4o mini',gemini:'Gemini'}[m]||(m||'AI');}
+function modelLabel(m){return{claude:'Claude',openai:'GPT-4o',gemini:'Gemini'}[m]||(m||'AI');}
 
 let tc=0;
 function showTyping(){
