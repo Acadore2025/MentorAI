@@ -1414,7 +1414,12 @@ RESPONSE LENGTH OVERRIDE (HIGHEST PRIORITY):
 - "summarize / brief / short / tldr / quickly / in one line" → 3-5 lines MAX. No headers. No bullets. Conversational only.
 - "explain / detail / deep dive / elaborate / break it down" → go full depth
 - User length instruction ALWAYS overrides everything else
-- Default (no instruction given): Conversational depth — like a real back-and-forth session. Not a lecture. Not a list. A conversation.`;
+- Default (no instruction given): Conversational depth — like a real back-and-forth session. Not a lecture. Not a list. A conversation.
+
+WEB SEARCH — CRITICAL RULE:
+If the system prompt contains "LIVE WEB SEARCH RESULTS" — you MUST use that data to answer.
+NEVER say "I don't have access to real-time data" or "my training cutoff is 2023".
+You have live web search. Use it. Always cite the source naturally in your answer.`;
 }
 
 function showWelcomeMessage(){
