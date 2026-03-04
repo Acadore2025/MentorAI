@@ -1,7 +1,25 @@
 {
   "version": 2,
   "rewrites": [
-    { "source": "/api/chat", "destination": "/api/chat.js" },
-    { "source": "/(.*)", "destination": "/index.html" }
+    {
+      "source": "/api/chat",
+      "destination": "/api/chat.js"
+    },
+    {
+      "source": "/api/memory",
+      "destination": "/api/memory.js"
+    },
+    {
+      "source": "/api/emotion",
+      "destination": "/api/emotion.js"
+    },
+    {
+      "source": "/api/search",
+      "destination": "/api/search.js"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
   ]
 }
