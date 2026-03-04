@@ -147,8 +147,8 @@ ${webContext}
 
     // Step 6: Smart model selection
     // gpt-4o for live web search (accuracy critical)
-    // gpt-4o-mini for teaching/concepts (speed + cost)
-    const smartModel = webContext ? 'gpt-4o' : 'openai';
+    // gpt-4o for all responses — mini cannot follow complex instructions
+    const smartModel = 'gpt-4o';
 
     const response = await callAI(smartModel, finalMessages, systemPrompt);
     return res.status(200).json(response);
@@ -863,11 +863,10 @@ This overrides your default response style for this one message.`;
 async function callAI(model, messages, system) {
   if (model === 'claude') return callClaude(messages, system);
   if (model === 'gemini') return callGemini(messages, system);
-  if (model === 'gpt-4o') return callOpenAI(messages, system, 'gpt-4o');
-  return callOpenAI(messages, system, 'gpt-4o-mini');
+  return callOpenAI(messages, system, 'gpt-4o');
 }
 
-async function callOpenAI(messages, system, modelName = 'gpt-4o-mini') {
+async function callOpenAI(messages, system, modelName = 'gpt-4o') {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error('OPENAI_API_KEY not configured');
 
