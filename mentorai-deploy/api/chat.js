@@ -256,16 +256,17 @@ function detectIntent(message, student = {}, history = []) {
 
   let socraticMode = socraticTriggers.some(t => msg.includes(t));
 
-  // Skip intake if already mid-conversation or already diagnosing
-  const hasContext = history.length >= 4;
+  // Skip intake only if already diagnosing THIS topic in last 3 messages
   const alreadyDiagnosing = history.slice(-3).some(m =>
-    ['what company','how much do you know','what level','how many hours',
-     'which subject','who is the audience','tell me the idea'].some(t =>
+    ['what company','which company','how much do you know','what level','how many hours',
+     'which subject','who is the audience','tell me the idea','what role',
+     'how comfortable','what are the two options'].some(t =>
       (m.content || '').toLowerCase().includes(t)
     )
   );
 
-  if (socraticMode && !hasContext && !alreadyDiagnosing) {
+  // Always trigger socratic intake when situation detected — regardless of history length
+  if (socraticMode && !alreadyDiagnosing) {
     mode = 'socratic_intake';
   }
 
