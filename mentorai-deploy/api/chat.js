@@ -239,7 +239,37 @@ function detectIntent(message, student = {}, history = []) {
   if (signals.wantsExplanation || subject || signals.wantsPractice || signals.wantsFlashcards) tools.push('knowledge_base');
   if (signals.needsSupport || needsEmotionalFirst)               tools.push('emotional_support');
 
-  console.log('🧠 Agent decision:', { mode, subject, tools, signals: Object.keys(signals).filter(k => signals[k]) });
+  // ── SOCRATIC INTAKE DETECTION ────────────────────────────
+  const socraticTriggers = [
+    'interview tomorrow','interview today','interview this week',
+    'got an interview','have an interview','i have an interview',
+    'exam tomorrow','exam today','exam this week',
+    'test tomorrow','test today','paper tomorrow','viva tomorrow',
+    'presentation tomorrow','presentation today','demo tomorrow','present tomorrow',
+    'want to learn','want to start','how do i start','where do i begin',
+    'i want to become','planning to learn','want to become',
+    'feeling stuck','dont know what to do','no direction',
+    'confused about career','what should i do with',
+    'started a startup','have an idea','building a product','launching soon',
+    'got a job offer','job offer','should i join','negotiating salary'
+  ];
+
+  let socraticMode = socraticTriggers.some(t => msg.includes(t));
+
+  // Skip intake if already mid-conversation or already diagnosing
+  const hasContext = history.length >= 4;
+  const alreadyDiagnosing = history.slice(-3).some(m =>
+    ['what company','how much do you know','what level','how many hours',
+     'which subject','who is the audience','tell me the idea'].some(t =>
+      (m.content || '').toLowerCase().includes(t)
+    )
+  );
+
+  if (socraticMode && !hasContext && !alreadyDiagnosing) {
+    mode = 'socratic_intake';
+  }
+
+  console.log('🧠 Agent decision:', { mode, subject, tools, socraticMode, signals: Object.keys(signals).filter(k => signals[k]) });
 
   return {
     // Core flags
@@ -610,7 +640,39 @@ End with a memory trick to never confuse them again.`,
 
     conversation: `DELIVERY: Conversational mode.
 Respond naturally and warmly. No teaching structure needed.
-Keep it brief and human. Ask what they want to work on next.`
+Keep it brief and human. Ask what they want to work on next.`,
+
+    socratic_intake: `DELIVERY: Socratic Intake mode.
+The student shared a HIGH-STAKES situation. Do NOT jump to advice yet.
+Diagnose before you prescribe — like a smart mentor would.
+
+RULES:
+1. Acknowledge their situation in ONE warm sentence — genuine, not generic
+2. Ask ONLY 1 question — the single most important one right now
+3. Occasionally 2 if they are very short and flow as one natural thought
+4. NEVER ask 3 or more questions — ever. It feels like a job application form.
+5. After they answer — ask the NEXT most important question if still needed
+6. Once you have enough context — stop asking and help fully
+
+HOW TO PICK THE ONE RIGHT QUESTION:
+- Interview → "What company is it for?" — everything else flows from that
+- Exam → "Which subject is worrying you most?"
+- Presentation → "Who is the audience?"
+- Want to learn → "What is driving this — a specific job goal or general curiosity?"
+- Stuck/lost → "What area feels most unclear right now — career, studies, or something personal?"
+- Startup idea → "Tell me the idea in one line"
+- Job offer → "What are the two options you are choosing between?"
+
+TONE: Like a smart friend who genuinely wants to understand — not a chatbot running a script.
+
+GOOD EXAMPLE:
+Student: "I have a Python interview tomorrow"
+You: "Nice — which company is it for?"
+[Wait. Then next question based on their answer.]
+
+BAD EXAMPLE — NEVER do this:
+"What company, what role, what topics are covered, how many hours do you have, and what is your current Python level?"
+That is an interrogation. Not mentoring.`
   };
 
   const deliveryFormat = deliveryFormats[intent.mode] || deliveryFormats[intent.content_type] || deliveryFormats.teaching;
