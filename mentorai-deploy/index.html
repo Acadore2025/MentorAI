@@ -1728,9 +1728,8 @@ async function routeQuery(msg){
   }catch(e){
     // Smart keyword fallback — works with any single key
     const l=msg.toLowerCase();
-    if(l.includes('trend')||l.includes('market')||l.includes('latest')||l.includes('2025')) return{model:'gemini',reason:'Trend query'};
+    // All queries go to OpenAI — Tavily handles live web search
     if(l.includes('code')||l.includes('python')||l.includes('javascript')||l.includes('learn')||l.includes('skill')) return{model:'openai',reason:'Technical query'};
-    if(l.includes('career')||l.includes('job')||l.includes('goal')||l.includes('feel')||l.includes('life')) return{model:'claude',reason:'Career/life query'};
     return{model:'openai',reason:'Default — OpenAI'};
   }
 }
