@@ -35,8 +35,11 @@ export default async function handler(req, res) {
 
     // Step 3b: Web search if current affairs / news needed
     let webContext = '';
+    console.log('🔍 needsWebSearch:', intent.needsWebSearch, '| message:', userMessage);
     if (intent.needsWebSearch) {
+      console.log('🌐 Calling Tavily for:', userMessage);
       webContext = await searchWeb(userMessage);
+      console.log('✅ Tavily returned:', webContext ? webContext.slice(0, 200) : 'EMPTY');
     }
 
     // Step 4: Build the full teaching prompt
@@ -205,6 +208,7 @@ ${ranked.map((h, i) => `[${i+1}] ${h.fields?.topic || ''} (${h.fields?.content_t
 async function searchWeb(query) {
   try {
     const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
+    console.log('🔑 TAVILY_API_KEY exists:', !!TAVILY_API_KEY);
     if (!TAVILY_API_KEY) return '';
 
     const res = await fetch('https://api.tavily.com/search', {
