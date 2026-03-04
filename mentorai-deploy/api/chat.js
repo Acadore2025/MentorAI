@@ -48,13 +48,18 @@ export default async function handler(req, res) {
     // Step 5: Inject web context directly into messages if available
     let finalMessages = messages;
     if (webContext) {
-      // Inject web results as a system message right before the last user message
       const lastUserMsg = finalMessages[finalMessages.length - 1];
       finalMessages = [
         ...finalMessages.slice(0, -1),
         {
           role: 'user',
-          content: `[LIVE WEB SEARCH DATA - USE THIS TO ANSWER]:
+          content: `IMPORTANT INSTRUCTIONS:
+- You have NO independent knowledge of current events, news, or anything after 2023.
+- The ONLY source of truth for current information is the web search data below.
+- You MUST use this data to answer. Do NOT fall back to your training data.
+- If the web search data answers the question — use it directly and cite it.
+
+[LIVE WEB SEARCH DATA]:
 ${webContext}
 
 [USER QUESTION]: ${lastUserMsg.content}`
@@ -62,8 +67,11 @@ ${webContext}
       ];
     }
 
-    // Step 6: Call AI
-    const response = await callAI(model, finalMessages, systemPrompt);
+    // Step 6: Smart model selection
+    // gpt-4o for live web search (accuracy critical)
+    // gpt-4o-mini for teaching/concepts (speed + cost)
+    const smartModel = webContext ? 'gpt-4o' : 'openai';
+    const response = await callAI(smartModel, finalMessages, systemPrompt);
 
     return res.status(200).json(response);
 
@@ -391,10 +399,11 @@ ${ragContext}
 async function callAI(model, messages, system) {
   if (model === 'claude') return callClaude(messages, system);
   if (model === 'gemini') return callGemini(messages, system);
-  return callOpenAI(messages, system);
+  if (model === 'gpt-4o') return callOpenAI(messages, system, 'gpt-4o');
+  return callOpenAI(messages, system, 'gpt-4o-mini');
 }
 
-async function callOpenAI(messages, system) {
+async function callOpenAI(messages, system, modelName = 'gpt-4o-mini') {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error('OPENAI_API_KEY not configured');
 
@@ -402,7 +411,7 @@ async function callOpenAI(messages, system) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
     body: JSON.stringify({
-      model: 'gpt-4o-mini',
+      model: modelName,
       messages: [{ role: 'system', content: system }, ...messages],
       max_tokens: 1200,
       temperature: 0.7
