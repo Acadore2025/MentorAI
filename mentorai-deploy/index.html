@@ -286,6 +286,12 @@ pointer-events:none;z-index:0}
 .study-choice{background:var(--surface);border:1px solid var(--border2);border-radius:10px;padding:10px 16px;font-size:13px;color:var(--text);cursor:pointer;transition:all 0.2s;font-family:'Outfit',sans-serif}
 .study-choice:hover{border-color:var(--accent);color:var(--accent)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+  .stream-bubble .cursor { margin-left: 2px; }
 </style>
 </head>
 <body>
@@ -1719,6 +1725,9 @@ async function sendMessage(){
     const emotionLabel = reply && window._lastEmotion && window._lastEmotion !== 'neutral'
       ? `Powered by Tavily + OpenAI · Detected: ${window._lastEmotion}`
       : 'Powered by Tavily + OpenAI';
+    // Remove stream bubble if it exists (appendBubble will show the final formatted version)
+    const streamBubbles = document.querySelectorAll('.stream-bubble');
+    streamBubbles.forEach(b => b.remove());
     appendBubble('assistant',reply,'openai', emotionLabel);
     saveMessages();
     saveMessageToSupabase(aiMsg);
@@ -1757,31 +1766,109 @@ async function routeQuery(msg){
 }
 
 // ── ALL API CALLS GO THROUGH SECURE VERCEL BACKEND ──────────
-// No API keys in the frontend. Ever.
+// Streaming version — words appear instantly like ChatGPT
 async function callProxy(model, msgs){
+  const payload = {
+    model,
+    stream: true,
+    messages: msgs.map(m=>({role:m.role, content:m.content})),
+    system: buildSystemPrompt(),
+    max_tokens: 1024,
+    profile: {
+      name:             profile.name             || '',
+      personality_type: profile.personalityType  || 'The Grower',
+      learning_style:   profile.learnStyle       || 'visual',
+      academic_level:   profile.role             || 'Student',
+      exam_target:      profile.goal             || 'CBSE',
+      current_emotion:  profile.currentEmotion   || 'neutral',
+      weak_subjects:    profile.weakSubjects      || [],
+      strong_subjects:  profile.strongSubjects    || []
+    }
+  };
+
   const res = await fetch('/api/chat', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      messages: msgs.map(m=>({role:m.role, content:m.content})),
-      system: buildSystemPrompt(),
-      max_tokens: 1024,
-      profile: {
-        name:             profile.name             || '',
-        personality_type: profile.personalityType  || 'The Grower',
-        learning_style:   profile.learnStyle       || 'visual',
-        academic_level:   profile.role             || 'Student',
-        exam_target:      profile.goal             || 'CBSE',
-        current_emotion:  profile.currentEmotion   || 'neutral',
-        weak_subjects:    profile.weakSubjects      || [],
-        strong_subjects:  profile.strongSubjects    || []
-      }
-    })
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream'
+    },
+    body: JSON.stringify(payload)
   });
+
   if(!res.ok){ const e=await res.json(); throw new Error(e.error||'Server error'); }
-  const data = await res.json();
-  return data.content || data.reply || '';
+
+  // ── Handle streaming response ────────────────────────────
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let fullContent = '';
+  let streamBubble = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value);
+    const lines = chunk.split('\n').filter(l => l.startsWith('data: '));
+
+    for (const line of lines) {
+      try {
+        const data = JSON.parse(line.slice(6));
+
+        if (data.error) throw new Error(data.error);
+
+        if (data.token) {
+          fullContent += data.token;
+          // Create bubble on first token
+          if (!streamBubble) {
+            streamBubble = createStreamBubble();
+          }
+          updateStreamBubble(streamBubble, fullContent);
+        }
+
+        if (data.done) {
+          return fullContent;
+        }
+      } catch(e) { /* skip parse errors */ }
+    }
+  }
+
+  return fullContent;
+}
+
+// Create a streaming bubble in the chat
+function createStreamBubble() {
+  const chatEl = document.getElementById('chatMessages') || document.querySelector('.chat-messages') || document.querySelector('[id*="chat"]');
+  if (!chatEl) return null;
+
+  const bubble = document.createElement('div');
+  bubble.className = 'stream-bubble';
+  bubble.style.cssText = `
+    background: var(--card-bg, #1a1a2e);
+    border: 1px solid var(--border, #333);
+    border-radius: 12px;
+    padding: 16px;
+    margin: 8px 0;
+    max-width: 85%;
+    color: var(--text, #fff);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  `;
+  chatEl.appendChild(bubble);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  return bubble;
+}
+
+// Update streaming bubble with new content
+function updateStreamBubble(bubble, content) {
+  if (!bubble) return;
+  // Convert markdown-style bold to HTML
+  const formatted = content
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>');
+  bubble.innerHTML = formatted + '<span class="cursor" style="animation:blink 1s infinite">▋</span>';
+  const chatEl = bubble.parentElement;
+  if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
 }
 
 async function callClaude(msgs){ return callProxy('claude', msgs); }
