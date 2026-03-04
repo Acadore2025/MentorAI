@@ -203,7 +203,8 @@ function extractStudentContext(profile) {
     exam_target:     profile.exam_target      || 'CBSE',
     emotion:         profile.current_emotion  || 'neutral',
     weak_subjects:   profile.weak_subjects    || [],
-    strong_subjects: profile.strong_subjects  || []
+    strong_subjects: profile.strong_subjects  || [],
+    memory:          profile.memory           || null
   };
 }
 
@@ -830,7 +831,21 @@ Personality: ${student.personality}
 Level: ${student.level}
 Target Exam: ${student.exam_target}
 Emotion Right Now: ${student.emotion}
-Weak Areas: ${student.weak_subjects.join(', ') || 'None specified'}
+Weak Areas: ${student.weak_subjects.join(', ') || 'None specified'}${student.memory ? `
+
+========================================
+LONG-TERM MEMORY - WHAT YOU KNOW ABOUT THIS STUDENT
+========================================
+Goal: ${student.memory.goal || 'Not specified'}
+Known Weak Areas: ${(student.memory.weak_areas || []).join(', ') || 'None yet'}
+Known Strong Areas: ${(student.memory.strong_areas || []).join(', ') || 'None yet'}
+Last Topic Covered: ${student.memory.last_topic || 'First session'}
+Last Session: ${student.memory.last_session_summary || 'No previous session'}
+Pending Followup: ${student.memory.pending_followup || 'None'}
+Study Pattern: ${student.memory.study_pattern || 'Unknown yet'}
+Context: ${student.memory.total_sessions_context || 'New student'}
+
+USE THIS MEMORY: Reference it naturally. Continue from where they left off. Never ask things you already know.` : ''}
 
 ========================================
 EMOTION GUIDANCE
