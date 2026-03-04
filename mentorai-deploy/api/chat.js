@@ -53,75 +53,47 @@ export default async function handler(req, res) {
       console.log('✅ Tavily returned:', webContext ? webContext.slice(0, 200) : 'EMPTY');
     }
 
-    // Step 4: Build the full teaching prompt
-    const systemPrompt = buildTeachingPrompt(baseSystem, student, ragContext, intent, webContext);
-
-    // Step 4b: If socratic mode — inject instruction directly into user message
+    // Step 4b: Socratic intake — figure out next question BEFORE building prompt
+    let socraticInstruction = '';
     if (intent.mode === 'socratic_intake') {
-      const lastMsg = messages[messages.length - 1];
-      const recentExchange = messages.slice(-6).map(m => m.content || '').join(' ').toLowerCase();
+      const recentExchange = messages.slice(-8).map(m => m.content || '').join(' ').toLowerCase();
 
-      // Figure out what we already know and what to ask next
-      const knowsCompany    = recentExchange.match(/accenture|google|amazon|flipkart|tcs|infosys|wipro|microsoft|meta|startup|mnc/i);
-      const knowsLevel      = recentExchange.match(/beginner|intermediate|senior|years|experience|i know|i dont know|nothing|basics|comfortable/i);
-      const knowsTime       = recentExchange.match(/hours|tonight|all day|few hours|whole day|\d hour/i);
-
-      // Detect what kind of situation this is
       const isStudyPlan = recentExchange.match(/study plan|make a plan|create a plan|help me prepare|how should i prepare|prepare for/i);
       const isInterview = recentExchange.match(/interview/i);
 
-      let nextQuestion = '';
+      const knowsCompany  = recentExchange.match(/accenture|genpact|google|amazon|flipkart|tcs|infosys|wipro|microsoft|meta|deloitte|capgemini|cognizant|hcl|startup|mnc/i);
+      const knowsLevel    = recentExchange.match(/beginner|intermediate|senior|years of exp|i know|i dont know|nothing|basics|comfortable|solid|decent|some exp/i);
+      const knowsTime     = recentExchange.match(/\d+\s*(hour|hr|hrs)|hour a day|hours a day|per day|daily|tonight|all day/i);
+      const knowsHours    = recentExchange.match(/\d+\s*(hour|hr|hrs)|hour a day|hours a day|per day|daily/i);
+      const knowsDeadline = recentExchange.match(/\d+\s*(day|week|month|year)|jee|neet|upsc|cat|gate|exam date|deadline/i);
+      const knowsWeak     = recentExchange.match(/weak|struggle|bad at|not good|difficult|hard for me|confused about/i);
 
       if (isStudyPlan) {
-        const knowsHours    = recentExchange.match(/\d+\s*(hour|hr|hrs|hours)|hour a day|hours a day|per day|daily/i);
-        const knowsDeadline = recentExchange.match(/\d+\s*(day|week|month|year)|by [a-z]+|in [0-9]|deadline|exam date|jee|neet|upsc|cat|gate/i);
-        const knowsWeak     = recentExchange.match(/weak|struggle|bad at|not good|difficult|hard for me|confused about/i);
-
-        if (!knowsHours) {
-          nextQuestion = 'Ask ONLY: how many hours a day can they realistically give to this?';
-        } else if (!knowsDeadline) {
-          nextQuestion = 'Ask ONLY: what is their deadline or target date?';
-        } else if (!knowsWeak) {
-          nextQuestion = 'Ask ONLY: which topics or subjects feel weakest right now?';
-        } else {
-          nextQuestion = 'NOW you have enough context. Build a precise, realistic study plan based on their hours, deadline, and weak areas.';
-        }
+        if (!knowsHours)    socraticInstruction = 'how many hours a day can you realistically give?';
+        else if (!knowsDeadline) socraticInstruction = 'what is your target date or deadline?';
+        else if (!knowsWeak)     socraticInstruction = 'which subjects or topics feel weakest right now?';
+        else                     socraticInstruction = 'DONE_DIAGNOSING';
       } else if (isInterview) {
-        if (!knowsCompany) {
-          nextQuestion = 'Ask ONLY: which company is the interview for?';
-        } else if (!knowsLevel) {
-          nextQuestion = 'Ask ONLY: how comfortable are they with the relevant skills right now — beginner, some experience, or solid?';
-        } else if (!knowsTime) {
-          nextQuestion = 'Ask ONLY: how many hours do they have to prepare?';
-        } else {
-          nextQuestion = 'NOW you have enough context. Give a focused, specific preparation plan based on everything they told you.';
-        }
+        if (!knowsCompany)  socraticInstruction = 'which company is it for?';
+        else if (!knowsLevel)    socraticInstruction = 'how comfortable are you with the relevant skills — beginner, some experience, or fairly solid?';
+        else if (!knowsTime)     socraticInstruction = 'how many hours do you have to prepare?';
+        else                     socraticInstruction = 'DONE_DIAGNOSING';
       } else {
-        // General situation — ask the most important missing piece
-        if (!knowsLevel) {
-          nextQuestion = 'Ask ONLY: what is their current level or experience with this?';
-        } else if (!knowsTime) {
-          nextQuestion = 'Ask ONLY: how much time do they have?';
-        } else {
-          nextQuestion = 'NOW you have enough context. Give targeted, specific help based on everything they told you.';
-        }
+        if (!knowsLevel)    socraticInstruction = 'what is your current level with this?';
+        else if (!knowsTime)     socraticInstruction = 'how much time do you have?';
+        else                     socraticInstruction = 'DONE_DIAGNOSING';
       }
 
-      const injected = [
-        ...messages.slice(0, -1),
-        {
-          role: 'user',
-          content: `${lastMsg.content}
-
-[SYSTEM OVERRIDE — HIGHEST PRIORITY]:
-${nextQuestion}
-Do not give a full plan yet unless instructed above.
-Keep response to 2-3 lines maximum.
-One question only — natural, warm, conversational.`
-        }
-      ];
-      messages = injected;
+      // If done diagnosing — switch to normal teaching mode
+      if (socraticInstruction === 'DONE_DIAGNOSING') {
+        intent.mode = 'teaching';
+        socraticInstruction = '';
+      }
     }
+
+    // Step 4: Build the full teaching prompt (now with socraticInstruction available)
+    intent._socraticInstruction = socraticInstruction;
+    const systemPrompt = buildTeachingPrompt(baseSystem, student, ragContext, intent, webContext);
 
     // Step 5: Inject web context directly into messages if available
     let finalMessages = messages;
@@ -841,6 +813,20 @@ ${ragContext}
 ⚠️ USE the knowledge above as your source.
 ⚠️ TRANSFORM it into ${student.name}'s learning style — do NOT copy verbatim.
 ⚠️ Deliver it the way a ${student.learning_style} learner needs it.`;
+  }
+
+  // Socratic intake — OVERRIDE everything with a simple, laser-focused prompt
+  if (intent._socraticInstruction) {
+    return `You are ${student.name}'s personal mentor. You are in the middle of understanding their situation before giving advice.
+
+Your ONLY task right now: Ask this one question naturally — "${intent._socraticInstruction}"
+
+Rules:
+- ONE sentence acknowledging what they said (optional, only if natural)
+- Then ask the question — warm, direct, like a friend
+- STOP. Nothing else.
+- No bullet points. No tips. No preparation advice. No lists.
+- Maximum 2 sentences total.`;
   }
 
   // Inject emotion-based instruction if detected with confidence
