@@ -45,8 +45,25 @@ export default async function handler(req, res) {
     // Step 4: Build the full teaching prompt
     const systemPrompt = buildTeachingPrompt(baseSystem, student, ragContext, intent, webContext);
 
-    // Step 5: Call AI
-    const response = await callAI(model, messages, systemPrompt);
+    // Step 5: Inject web context directly into messages if available
+    let finalMessages = messages;
+    if (webContext) {
+      // Inject web results as a system message right before the last user message
+      const lastUserMsg = finalMessages[finalMessages.length - 1];
+      finalMessages = [
+        ...finalMessages.slice(0, -1),
+        {
+          role: 'user',
+          content: `[LIVE WEB SEARCH DATA - USE THIS TO ANSWER]:
+${webContext}
+
+[USER QUESTION]: ${lastUserMsg.content}`
+        }
+      ];
+    }
+
+    // Step 6: Call AI
+    const response = await callAI(model, finalMessages, systemPrompt);
 
     return res.status(200).json(response);
 
