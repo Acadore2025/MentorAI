@@ -1,5 +1,5 @@
 // ============================================================
-// api/chat.js — MentorAI Brain
+// api/chat.js - MentorAI Brain
 // ============================================================
 // Flow:
 // 1. Read student profile (learning style, emotion, level)
@@ -30,7 +30,7 @@ export default async function handler(req, res) {
     // Step 2b: Auto-detect emotion from message
     const emotionData = detectEmotionFromMessage(userMessage, messages.slice(-4));
     if (emotionData.detected) {
-      console.log('💭 Emotion detected:', emotionData.emotion, '| confidence:', emotionData.confidence + '%');
+      console.log('? Emotion detected:', emotionData.emotion, '| confidence:', emotionData.confidence + '%');
       // Override profile emotion with detected emotion if confidence is high enough
       if (emotionData.confidence >= 40) {
         student.emotion = emotionData.emotion;
@@ -46,29 +46,29 @@ export default async function handler(req, res) {
 
     // Step 3b: Web search if current affairs / news needed
     let webContext = '';
-    console.log('🔍 needsWebSearch:', intent.needsWebSearch, '| message:', userMessage);
+    console.log('[SEARCH] needsWebSearch:', intent.needsWebSearch, '| message:', userMessage);
     if (intent.needsWebSearch) {
-      console.log('🌐 Calling Tavily for:', userMessage);
+      console.log('[WEB] Calling Tavily for:', userMessage);
       webContext = await searchWeb(userMessage);
-      console.log('✅ Tavily returned:', webContext ? webContext.slice(0, 200) : 'EMPTY');
+      console.log('[OK] Tavily returned:', webContext ? webContext.slice(0, 200) : 'EMPTY');
 
       if (webContext) {
         const needsLiveDisclaimer = /live|score|right now|this minute|real.?time|breaking|stock price|share price|crypto/i.test(userMessage);
         if (needsLiveDisclaimer) {
           webContext += `
 
-⚠️ IMPORTANT: End your response with this exact line:
-"📡 This is based on the latest available information. For live updates, check the relevant source (Cricinfo / NSE / Google News) directly."`;
+[WARN]? IMPORTANT: End your response with this exact line:
+"[SIGNAL] This is based on the latest available information. For live updates, check the relevant source (Cricinfo / NSE / Google News) directly."`;
         } else {
           webContext += `
 
-📌 IMPORTANT: End your response with this line:
-"📡 Based on latest available information. Data may have changed — verify from primary sources."`;
+[PIN] IMPORTANT: End your response with this line:
+"[SIGNAL] Based on latest available information. Data may have changed - verify from primary sources."`;
         }
       }
     }
 
-    // Step 4b: Socratic intake — figure out next question BEFORE building prompt
+    // Step 4b: Socratic intake - figure out next question BEFORE building prompt
     let socraticInstruction = '';
     if (intent.mode === 'socratic_intake') {
       const recentExchange = messages.slice(-8).map(m => m.content || '').join(' ').toLowerCase();
@@ -90,7 +90,7 @@ export default async function handler(req, res) {
         else                     socraticInstruction = 'DONE_DIAGNOSING';
       } else if (isInterview) {
         if (!knowsCompany)  socraticInstruction = 'which company is it for?';
-        else if (!knowsLevel)    socraticInstruction = 'how comfortable are you with the relevant skills — beginner, some experience, or fairly solid?';
+        else if (!knowsLevel)    socraticInstruction = 'how comfortable are you with the relevant skills - beginner, some experience, or fairly solid?';
         else if (!knowsTime)     socraticInstruction = 'how many hours do you have to prepare?';
         else                     socraticInstruction = 'DONE_DIAGNOSING';
       } else {
@@ -99,7 +99,7 @@ export default async function handler(req, res) {
         else                     socraticInstruction = 'DONE_DIAGNOSING';
       }
 
-      // If done diagnosing — switch to normal teaching mode
+      // If done diagnosing - switch to normal teaching mode
       if (socraticInstruction === 'DONE_DIAGNOSING') {
         intent.mode = 'teaching';
         socraticInstruction = '';
@@ -108,7 +108,7 @@ export default async function handler(req, res) {
 
     // Step 4: Build the full teaching prompt (now with socraticInstruction available)
     intent._socraticInstruction = socraticInstruction;
-    // ── SOLID TIME COMPASS — injected on every request ──────────
+    // -- SOLID TIME COMPASS - injected on every request ----------
     const _now        = new Date();
     const _year       = _now.getFullYear();
     const _month      = _now.toLocaleString('en-US', { month: 'long' });
@@ -119,29 +119,29 @@ export default async function handler(req, res) {
     const _lastMonth  = new Date(_now); _lastMonth.setMonth(_now.getMonth() - 1);
     const _lastYear   = _year - 1;
 
-    const timeCompass = \`
-════════════════════════════════════════
-INTERNAL TIME COMPASS — READ BEFORE EVERY RESPONSE
-════════════════════════════════════════
-Current date    : \${_weekday}, \${_month} \${_date}, \${_year}
-Yesterday       : \${_yesterday.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' })}
-Last week       : week of \${_lastWeek.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })}
-Last month      : \${_lastMonth.toLocaleString('en-US', { month:'long', year:'numeric' })}
-Last year       : \${_lastYear}
-Current year    : \${_year}
+    const timeCompass = `
+========================================
+INTERNAL TIME COMPASS - READ BEFORE EVERY RESPONSE
+========================================
+Current date    : ${_weekday}, ${_month} ${_date}, ${_year}
+Yesterday       : ${_yesterday.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' })}
+Last week       : week of ${_lastWeek.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })}
+Last month      : ${_lastMonth.toLocaleString('en-US', { month:'long', year:'numeric' })}
+Last year       : ${_lastYear}
+Current year    : ${_year}
 
-TIME RULES — NON-NEGOTIABLE:
-1. "Today" = \${_weekday}, \${_month} \${_date}, \${_year}. Not 2024. Not 2025. This exact date.
-2. "Yesterday" = \${_yesterday.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })}
-3. "This year" = \${_year}. "Last year" = \${_lastYear}.
-4. "Latest" or "recent" = must be from \${_year}, not older.
-5. If web search results mention a different year — IGNORE those results. Only use \${_year} data.
-6. If no \${_year} data exists in search results — say "I couldn't find confirmed \${_year} data" — never substitute old data.
-7. NEVER present a past event as current. NEVER guess. If unsure — say so.
-8. Sports results, news, prices, elections, rankings — ALL must be verified against \${_year}.
-════════════════════════════════════════\`;
+TIME RULES - NON-NEGOTIABLE:
+1. "Today" = ${_weekday}, ${_month} ${_date}, ${_year}. Not 2024. Not 2025. This exact date.
+2. "Yesterday" = ${_yesterday.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })}
+3. "This year" = ${_year}. "Last year" = ${_lastYear}.
+4. "Latest" or "recent" = must be from ${_year}, not older.
+5. If web search results mention a different year - IGNORE those results. Only use ${_year} data.
+6. If no ${_year} data exists in search results - say "I could not find confirmed ${_year} data" - never substitute old data.
+7. NEVER present a past event as current. NEVER guess. If unsure - say so.
+8. Sports results, news, prices, elections, rankings - ALL must be verified against ${_year}.
+========================================`;
 
-    const baseSystemWithDate = \`\${timeCompass}\n\n\${baseSystem}\`;
+    const baseSystemWithDate = `${timeCompass}\n\n${baseSystem}`;
     const systemPrompt = buildTeachingPrompt(baseSystemWithDate, student, ragContext, intent, webContext);
 
     // Step 5: Inject web context directly into messages if available
@@ -156,7 +156,7 @@ TIME RULES — NON-NEGOTIABLE:
 - You have NO independent knowledge of current events, news, or anything after 2023.
 - The ONLY source of truth for current information is the web search data below.
 - You MUST use this data to answer. Do NOT fall back to your training data.
-- If the web search data answers the question — use it directly and cite it.
+- If the web search data answers the question - use it directly and cite it.
 
 [LIVE WEB SEARCH DATA]:
 ${webContext}
@@ -168,7 +168,7 @@ ${webContext}
 
     // Step 6: Smart model selection
     // gpt-4o for live web search (accuracy critical)
-    // gpt-4o for all responses — mini cannot follow complex instructions
+    // gpt-4o for all responses - mini cannot follow complex instructions
     const smartModel = 'gpt-4o';
 
     const response = await callAI(smartModel, finalMessages, systemPrompt);
@@ -180,9 +180,9 @@ ${webContext}
   }
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // WHO IS THIS STUDENT
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 function extractStudentContext(profile) {
   const personalityToStyle = {
     'The Explorer':    'hands_on',
@@ -207,15 +207,15 @@ function extractStudentContext(profile) {
   };
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // LANGGRAPH-STYLE AGENT ROUTER
-// Analyses full context — decides which tools to run + order
+// Analyses full context - decides which tools to run + order
 // Much smarter than keyword matching
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 function detectIntent(message, student = {}, history = []) {
   const msg = message.toLowerCase().trim();
 
-  // ── SUBJECT DETECTION ─────────────────────────────────────
+  // -- SUBJECT DETECTION -------------------------------------
   let subject = null;
   const subjectMap = {
     'Physics':               ['physics','newton','force','motion','velocity','acceleration','electricity','magnetism','light','optics','pressure','thermodynamics','quantum','wave','energy','power','momentum','gravitation'],
@@ -232,7 +232,7 @@ function detectIntent(message, student = {}, history = []) {
     if (keywords.some(k => msg.includes(k))) { subject = sub; break; }
   }
 
-  // ── INTENT SIGNALS ────────────────────────────────────────
+  // -- INTENT SIGNALS ----------------------------------------
   const signals = {
     // Teaching signals
     wantsExplanation: ['explain','teach','what is','how does','tell me about','help me understand',
@@ -283,13 +283,13 @@ function detectIntent(message, student = {}, history = []) {
     ].some(k => msg.includes(k))
   };
 
-  // ── CONTEXT-AWARE ROUTING ─────────────────────────────────
+  // -- CONTEXT-AWARE ROUTING ---------------------------------
   // Check conversation history for context
   const recentHistory = history.slice(-4).map(m => (m.content || '').toLowerCase());
   const isFollowUp = recentHistory.length > 0;
   const prevWasPractice = recentHistory.some(m => m.includes('try') || m.includes('solve') || m.includes('attempt'));
 
-  // ── MULTI-TOOL DECISION ENGINE ────────────────────────────
+  // -- MULTI-TOOL DECISION ENGINE ----------------------------
   // Unlike simple keyword matching, this decides COMBINATIONS
 
   // SCENARIO 1: Emotional + Academic = support first, then teach
@@ -309,7 +309,7 @@ function detectIntent(message, student = {}, history = []) {
     !signals.wantsFlashcards && !signals.needsWebSearch && !signals.needsSupport &&
     ['hi','hello','hey','thanks','thank you','ok','okay','great','nice','cool','bye'].some(k => msg.includes(k));
 
-  // ── DETERMINE PRIMARY MODE ────────────────────────────────
+  // -- DETERMINE PRIMARY MODE --------------------------------
   let mode = 'teaching'; // default
   if (signals.wantsFlashcards)  mode = 'flashcards';
   if (signals.wantsPractice)    mode = 'practice';
@@ -321,13 +321,13 @@ function detectIntent(message, student = {}, history = []) {
   if (isAnswerAttempt)          mode = 'check_answer';
   if (isPureConversation)       mode = 'conversation';
 
-  // ── BUILD TOOL SEQUENCE ───────────────────────────────────
+  // -- BUILD TOOL SEQUENCE -----------------------------------
   const tools = [];
   if (signals.needsWebSearch)                                    tools.push('web_search');
   if (signals.wantsExplanation || subject || signals.wantsPractice || signals.wantsFlashcards) tools.push('knowledge_base');
   if (signals.needsSupport || needsEmotionalFirst)               tools.push('emotional_support');
 
-  // ── SOCRATIC INTAKE DETECTION ────────────────────────────
+  // -- SOCRATIC INTAKE DETECTION ----------------------------
   const socraticTriggers = [
     // Interview
     'interview tomorrow','interview today','interview this week',
@@ -337,7 +337,7 @@ function detectIntent(message, student = {}, history = []) {
     'test tomorrow','test today','paper tomorrow','viva tomorrow',
     // Presentation
     'presentation tomorrow','presentation today','demo tomorrow','present tomorrow',
-    // Study plan — needs diagnosis before building
+    // Study plan - needs diagnosis before building
     'make a study plan','make me a study plan','create a study plan',
     'study plan','make a plan','create a plan','build a plan',
     'help me prepare','help me study','how should i prepare',
@@ -371,7 +371,7 @@ function detectIntent(message, student = {}, history = []) {
     mode = 'socratic_intake';
   }
 
-  console.log('🧠 Agent decision:', { mode, subject, tools, socraticMode, signals: Object.keys(signals).filter(k => signals[k]) });
+  console.log('[BRAIN] Agent decision:', { mode, subject, tools, socraticMode, signals: Object.keys(signals).filter(k => signals[k]) });
 
   return {
     // Core flags
@@ -399,9 +399,9 @@ function detectIntent(message, student = {}, history = []) {
   };
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // SEARCH PINECONE FOR RIGHT CONTENT
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 async function searchKnowledge(query, learning_style, subject, content_type) {
   try {
     const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
@@ -443,15 +443,15 @@ async function searchKnowledge(query, learning_style, subject, content_type) {
       .slice(0, 4);
 
     const styleLabel = {
-      visual:   'Visual learner — loves diagrams and pictures',
-      hands_on: 'Hands-on learner — needs experiments and real activities',
-      story:    'Story learner — connects through narratives and history',
-      logical:  'Logical learner — wants proofs and step-by-step reasoning'
+      visual:   'Visual learner - loves diagrams and pictures',
+      hands_on: 'Hands-on learner - needs experiments and real activities',
+      story:    'Story learner - connects through narratives and history',
+      logical:  'Logical learner - wants proofs and step-by-step reasoning'
     }[learning_style] || 'Visual learner';
 
     return `STUDENT'S LEARNING STYLE: ${styleLabel}
 
-RETRIEVED KNOWLEDGE (use this content — deliver in their learning style):
+RETRIEVED KNOWLEDGE (use this content - deliver in their learning style):
 ${ranked.map((h, i) => `[${i+1}] ${h.fields?.topic || ''} (${h.fields?.content_type || ''})\n${h.fields?.text || h.fields?.chunk_text || h.metadata?.text || ''}`).join('\n\n---\n\n')}`;
 
   } catch (err) {
@@ -462,10 +462,10 @@ ${ranked.map((h, i) => `[${i+1}] ${h.fields?.topic || ''} (${h.fields?.content_t
 
 
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // AUTO EMOTION DETECTOR
-// Reads tone, words, punctuation — no AI call needed
-// ─────────────────────────────────────────────────────────────
+// Reads tone, words, punctuation - no AI call needed
+// -------------------------------------------------------------
 function detectEmotionFromMessage(message, history = []) {
   const msg = message.toLowerCase().trim();
   const scores = {};
@@ -568,12 +568,12 @@ function detectEmotionFromMessage(message, history = []) {
 
   const adjustmentMap = {
     panicked:     { tone: 'calm and urgent',         specialInstruction: 'Start with: "Okay, let\'s focus. Here\'s exactly what you need right now..." Give top 5 key points only. No deep diving.' },
-    frustrated:   { tone: 'empathetic and patient',  specialInstruction: 'Acknowledge their struggle first. Then try a COMPLETELY different angle — new analogy, new example.' },
+    frustrated:   { tone: 'empathetic and patient',  specialInstruction: 'Acknowledge their struggle first. Then try a COMPLETELY different angle - new analogy, new example.' },
     confused:     { tone: 'gentle and clear',         specialInstruction: 'Go back to absolute basics. One concept at a time. Smaller steps. Simpler language.' },
     anxious:      { tone: 'warm and reassuring',      specialInstruction: 'Address the anxiety in first 2 sentences before any content. Normalise the feeling.' },
     demotivated:  { tone: 'energising',               specialInstruction: 'Connect this topic to their actual goal first. Make it relevant before explaining.' },
     excited:      { tone: 'energetic and expansive',  specialInstruction: 'Match their energy! Then take them one level deeper than they expected.' },
-    confident:    { tone: 'peer-level',               specialInstruction: 'Validate quickly then raise the bar: "Great — now try this harder version..."' },
+    confident:    { tone: 'peer-level',               specialInstruction: 'Validate quickly then raise the bar: "Great - now try this harder version..."' },
     tired:        { tone: 'gentle and concise',       specialInstruction: 'Keep response short. End with a rest suggestion.' },
     neutral:      { tone: 'warm and engaging',        specialInstruction: '' }
   };
@@ -586,17 +586,17 @@ function detectEmotionFromMessage(message, history = []) {
   };
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // SEARCH WEB VIA TAVILY
 // Called for current affairs, news, exam notifications etc.
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 async function searchWeb(query) {
   try {
     const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
-    console.log('🔑 TAVILY_API_KEY exists:', !!TAVILY_API_KEY);
+    console.log('[KEY] TAVILY_API_KEY exists:', !!TAVILY_API_KEY);
     if (!TAVILY_API_KEY) return '';
 
-    // Always inject current date into search — solid time compass
+    // Always inject current date into search - solid time compass
     const now   = new Date();
     const year  = now.getFullYear();
     const month = now.toLocaleString('en-US', { month: 'long' });
@@ -612,14 +612,14 @@ async function searchWeb(query) {
       .replace(/\bthis week\b/gi, `week of ${month} ${year}`)
       .replace(/\blast month\b/gi, (() => { const d = new Date(now); d.setMonth(d.getMonth()-1); return d.toLocaleString('en-US',{month:'long',year:'numeric'}); })());
 
-    // Always append year to anchor results — prevents returning old data
+    // Always append year to anchor results - prevents returning old data
     // But if query already has a year (e.g. last year = 2025), don't append current year
     const hasAnyYear = /20[0-9]{2}/.test(resolvedQuery);
     const enrichedQuery = hasAnyYear
       ? resolvedQuery
       : `${resolvedQuery} ${year}`;
 
-    console.log('🔍 Tavily query:', enrichedQuery);
+    console.log('[SEARCH] Tavily query:', enrichedQuery);
 
     const res = await fetch('https://api.tavily.com/search', {
       method: 'POST',
@@ -673,44 +673,44 @@ LIVE WEB SEARCH RESULTS for: "${query}"
   }
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // BUILD THE COMPLETE TEACHING PROMPT
 // This is the heart of MentorAI
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 function buildTeachingPrompt(baseSystem, student, ragContext, intent, webContext = '') {
 
   const styleInstructions = {
-    visual: `TEACHING STYLE — VISUAL LEARNER:
-• Start by painting a clear mental image: "Picture this..." or "Imagine you can see..."
-• Use diagrams described in words: arrows, boxes, relationships
-• Use tables to compare concepts side by side
-• Make the invisible visible — describe what things LOOK like`,
+    visual: `TEACHING STYLE - VISUAL LEARNER:
+* Start by painting a clear mental image: "Picture this..." or "Imagine you can see..."
+* Use diagrams described in words: arrows, boxes, relationships
+* Use tables to compare concepts side by side
+* Make the invisible visible - describe what things LOOK like`,
 
-    hands_on: `TEACHING STYLE — HANDS-ON LEARNER:
-• Start with something they can DO right now: "Try this...", "Do this experiment..."
-• Give the experience FIRST — concept explanation comes AFTER they feel it
-• Connect every abstract idea to something physical, touchable, testable
-• Examples: coins, everyday objects, their own body, things at home`,
+    hands_on: `TEACHING STYLE - HANDS-ON LEARNER:
+* Start with something they can DO right now: "Try this...", "Do this experiment..."
+* Give the experience FIRST - concept explanation comes AFTER they feel it
+* Connect every abstract idea to something physical, touchable, testable
+* Examples: coins, everyday objects, their own body, things at home`,
 
-    story: `TEACHING STYLE — STORY LEARNER:
-• Start with a story, real person, or historical moment — ALWAYS
-• "In 1687, Newton was sitting..." / "Imagine you are a merchant in Venice..."
-• Make them FEEL part of the narrative before introducing the concept
-• Science and math happen to PEOPLE in PLACES — make it human`,
+    story: `TEACHING STYLE - STORY LEARNER:
+* Start with a story, real person, or historical moment - ALWAYS
+* "In 1687, Newton was sitting..." / "Imagine you are a merchant in Venice..."
+* Make them FEEL part of the narrative before introducing the concept
+* Science and math happen to PEOPLE in PLACES - make it human`,
 
-    logical: `TEACHING STYLE — LOGICAL LEARNER:
-• Start with a clean definition or first principle
-• Show every derivation step — no skipping, no hand-waving
-• Use: "Let's prove this formally..." / "From first principles..."
-• Connect to mathematical structures, exceptions, and deeper implications`
+    logical: `TEACHING STYLE - LOGICAL LEARNER:
+* Start with a clean definition or first principle
+* Show every derivation step - no skipping, no hand-waving
+* Use: "Let's prove this formally..." / "From first principles..."
+* Connect to mathematical structures, exceptions, and deeper implications`
   };
 
   const emotionGuides = {
     stressed:   'Student is STRESSED. Acknowledge briefly. Keep explanation short. Break into tiny steps. Extra encouragement.',
     anxious:    'Student is ANXIOUS. Be very gentle. Go slowly. Celebrate every small understanding.',
-    frustrated: 'Student is FRUSTRATED. Acknowledge the difficulty. Try a COMPLETELY fresh angle — not same explanation again.',
+    frustrated: 'Student is FRUSTRATED. Acknowledge the difficulty. Try a COMPLETELY fresh angle - not same explanation again.',
     confused:   'Student is CONFUSED. Start from absolute basics. Assume zero prior knowledge. Build slowly.',
-    curious:    'Student is CURIOUS — best state! Go deeper. Add fascinating connections. Make it exciting.',
+    curious:    'Student is CURIOUS - best state! Go deeper. Add fascinating connections. Make it exciting.',
     excited:    'Student is EXCITED! Match energy. Keep it dynamic. Move fast but thoroughly.',
     neutral:    'Normal engagement. Warm, clear, conversational.'
   };
@@ -718,49 +718,49 @@ function buildTeachingPrompt(baseSystem, student, ragContext, intent, webContext
   const deliveryFormats = {
     flashcards: `DELIVERY: Flashcard mode.
 Format each card as:
-🃏 Q: [question]
-✅ A: [answer]
+? Q: [question]
+[OK] A: [answer]
 Give 5 flashcards. After all 5 ask: "Want 5 more or shall we practice with questions?"`,
 
     practice: `DELIVERY: Practice mode.
 1. Give ONE practice problem at their level
-2. Let them attempt (end with "Try it — what do you get?")
+2. Let them attempt (end with "Try it - what do you get?")
 3. After they respond, walk through full solution step by step
 4. End with one slightly harder follow-up`,
 
     teaching: `DELIVERY: Teaching mode.
-1. HOOK (1-2 sentences in their learning style — grab attention)
-2. CORE CONCEPT (explained in their style — not textbook language)
+1. HOOK (1-2 sentences in their learning style - grab attention)
+2. CORE CONCEPT (explained in their style - not textbook language)
 3. REAL WORLD CONNECTION (something they can relate to personally)
 4. CHECK IN: End with "Does that click? Or should we try a different angle?"`,
 
     emotional_support: `DELIVERY: Emotional support mode.
-1. ACKNOWLEDGE — reflect back exactly what they said they're feeling
-2. NORMALISE — tell them this is common, they're not alone
-3. REFRAME — one perspective shift
-4. GENTLE NEXT STEP — one tiny action they can take right now
+1. ACKNOWLEDGE - reflect back exactly what they said they're feeling
+2. NORMALISE - tell them this is common, they're not alone
+3. REFRAME - one perspective shift
+4. GENTLE NEXT STEP - one tiny action they can take right now
 Never jump to solutions before they feel heard.`,
 
     exam_panic: `DELIVERY: Exam panic mode. TIME IS CRITICAL.
 1. ONE calm sentence: acknowledge the pressure
 2. "Here's your game plan for the next [X] hours:"
-3. Top 5 most important topics ONLY — no more
+3. Top 5 most important topics ONLY - no more
 4. For each topic: ONE key formula/concept in one line
 5. End with: "You've got this. Focus beats panic every time."
 Keep entire response under 200 words. No deep explanations.`,
 
     summary: `DELIVERY: Summary mode.
 Give a clean, scannable summary:
-📌 KEY POINTS (3-5 bullets max)
-🎯 CORE IDEA (one sentence)
-💡 REMEMBER THIS (one memorable hook)`,
+[PIN] KEY POINTS (3-5 bullets max)
+[TARGET] CORE IDEA (one sentence)
+[IDEA] REMEMBER THIS (one memorable hook)`,
 
     study_plan: `DELIVERY: Study plan mode.
 Build a realistic plan:
-📅 TIMELINE: [based on their exam/goal]
-📚 WEEK BY WEEK breakdown
-⏰ DAILY time commitment (be realistic, not aspirational)
-✅ MILESTONES to track progress
+[CAL] TIMELINE: [based on their exam/goal]
+[BOOK] WEEK BY WEEK breakdown
+? DAILY time commitment (be realistic, not aspirational)
+[OK] MILESTONES to track progress
 Start by asking: what's your exam date and daily available hours?`,
 
     comparison: `DELIVERY: Comparison mode.
@@ -772,7 +772,7 @@ Use a clear table or parallel structure:
 End with a memory trick to never confuse them again.`,
 
     check_answer: `DELIVERY: Answer check mode.
-1. Confirm if their answer is correct or not — directly
+1. Confirm if their answer is correct or not - directly
 2. If wrong: show exactly where they went wrong (not just the right answer)
 3. Walk through the correct method step by step
 4. Give one more similar problem to solidify`,
@@ -783,33 +783,33 @@ Keep it brief and human. Ask what they want to work on next.`,
 
     socratic_intake: `DELIVERY: Socratic Intake mode.
 The student shared a HIGH-STAKES situation. Do NOT jump to advice yet.
-Diagnose before you prescribe — like a smart mentor would.
+Diagnose before you prescribe - like a smart mentor would.
 
 RULES:
-1. Acknowledge their situation in ONE warm sentence — genuine, not generic
-2. Ask ONLY 1 question — the single most important one right now
+1. Acknowledge their situation in ONE warm sentence - genuine, not generic
+2. Ask ONLY 1 question - the single most important one right now
 3. Occasionally 2 if they are very short and flow as one natural thought
-4. NEVER ask 3 or more questions — ever. It feels like a job application form.
-5. After they answer — ask the NEXT most important question if still needed
-6. Once you have enough context — stop asking and help fully
+4. NEVER ask 3 or more questions - ever. It feels like a job application form.
+5. After they answer - ask the NEXT most important question if still needed
+6. Once you have enough context - stop asking and help fully
 
 HOW TO PICK THE ONE RIGHT QUESTION:
-- Interview → "What company is it for?" — everything else flows from that
-- Exam → "Which subject is worrying you most?"
-- Presentation → "Who is the audience?"
-- Want to learn → "What is driving this — a specific job goal or general curiosity?"
-- Stuck/lost → "What area feels most unclear right now — career, studies, or something personal?"
-- Startup idea → "Tell me the idea in one line"
-- Job offer → "What are the two options you are choosing between?"
+- Interview -> "What company is it for?" - everything else flows from that
+- Exam -> "Which subject is worrying you most?"
+- Presentation -> "Who is the audience?"
+- Want to learn -> "What is driving this - a specific job goal or general curiosity?"
+- Stuck/lost -> "What area feels most unclear right now - career, studies, or something personal?"
+- Startup idea -> "Tell me the idea in one line"
+- Job offer -> "What are the two options you are choosing between?"
 
-TONE: Like a smart friend who genuinely wants to understand — not a chatbot running a script.
+TONE: Like a smart friend who genuinely wants to understand - not a chatbot running a script.
 
 GOOD EXAMPLE:
 Student: "I have a Python interview tomorrow"
-You: "Nice — which company is it for?"
+You: "Nice - which company is it for?"
 [Wait. Then next question based on their answer.]
 
-BAD EXAMPLE — NEVER do this:
+BAD EXAMPLE - NEVER do this:
 "What company, what role, what topics are covered, how many hours do you have, and what is your current Python level?"
 That is an interrogation. Not mentoring.`
   };
@@ -821,95 +821,95 @@ That is an interrogation. Not mentoring.`
 
   let prompt = `${baseSystem}
 
-════════════════════════════════════════
-STUDENT PROFILE — READ THIS FIRST
-════════════════════════════════════════
+========================================
+STUDENT PROFILE - READ THIS FIRST
+========================================
 Name: ${student.name}
-Learning Style: ${student.learning_style.toUpperCase()} ← MOST IMPORTANT
+Learning Style: ${student.learning_style.toUpperCase()} <- MOST IMPORTANT
 Personality: ${student.personality}
 Level: ${student.level}
 Target Exam: ${student.exam_target}
 Emotion Right Now: ${student.emotion}
 Weak Areas: ${student.weak_subjects.join(', ') || 'None specified'}
 
-════════════════════════════════════════
+========================================
 EMOTION GUIDANCE
-════════════════════════════════════════
+========================================
 ${emotionGuide}
 
-════════════════════════════════════════
+========================================
 ${styleGuide}
 
-════════════════════════════════════════
+========================================
 ${deliveryFormat}
-════════════════════════════════════════
+========================================
 
-════════════════════════════════════════
-COMMUNICATION STYLE — NON-NEGOTIABLE
-════════════════════════════════════════
+========================================
+COMMUNICATION STYLE - NON-NEGOTIABLE
+========================================
 You communicate like the world's top 1% professionals.
 Your style is modelled after:
-- Clarity of Richard Feynman — explain complex things simply, never talk down
-- Precision of a Harvard professor — every word is chosen deliberately
-- Warmth of a seasoned mentor — you care, and it shows naturally
-- Confidence of a Fortune 500 CEO — direct, no hedging, no fluff
+- Clarity of Richard Feynman - explain complex things simply, never talk down
+- Precision of a Harvard professor - every word is chosen deliberately
+- Warmth of a seasoned mentor - you care, and it shows naturally
+- Confidence of a Fortune 500 CEO - direct, no hedging, no fluff
 
 HARD RULES ON LANGUAGE:
 - NEVER use: "certainly", "absolutely", "great question", "of course", "sure thing", "happy to help", "definitely", "fantastic"
 - NEVER start a response with a compliment about the question
 - Speak with authority but stay human and approachable
 - Use real-world analogies to explain abstract concepts
-- Every sentence must add value — if it doesn't, cut it
-- Structure: context → insight → action (when giving advice)
-- In conversation: be brief, warm, direct — like a trusted friend who happens to be an expert
+- Every sentence must add value - if it doesn't, cut it
+- Structure: context -> insight -> action (when giving advice)
+- In conversation: be brief, warm, direct - like a trusted friend who happens to be an expert
 
 NON-NEGOTIABLE RULES:
 1. NEVER start with a textbook definition
 2. ALWAYS start with their learning style hook
 3. Use ${student.name}'s name at least once naturally
-4. If confused — try a DIFFERENT angle, not the same explanation
-5. You are their personal mentor — warm, patient, specific to THEM
-6. Keep responses focused — do not overwhelm with too much at once
-7. NEVER say "I don't have access to real-time data" or "my training cutoff" — you have live web search. USE IT.
-8. If web search results are provided below — USE THEM to answer. Always.
+4. If confused - try a DIFFERENT angle, not the same explanation
+5. You are their personal mentor - warm, patient, specific to THEM
+6. Keep responses focused - do not overwhelm with too much at once
+7. NEVER say "I don't have access to real-time data" or "my training cutoff" - you have live web search. USE IT.
+8. If web search results are provided below - USE THEM to answer. Always.
 
-CONVERSATION vs CONTENT — CRITICAL DISTINCTION:
+CONVERSATION vs CONTENT - CRITICAL DISTINCTION:
 When the student sends a SHORT conversational message (under 15 words, no explicit request for a list or explanation):
-→ NEVER dump bullets, steps, lists, or full plans
-→ Respond conversationally — 2-3 lines MAX
-→ Ask ONE follow-up question or make ONE observation
-→ Think: "What would a smart friend say?" not "What would a textbook say?"
+-> NEVER dump bullets, steps, lists, or full plans
+-> Respond conversationally - 2-3 lines MAX
+-> Ask ONE follow-up question or make ONE observation
+-> Think: "What would a smart friend say?" not "What would a textbook say?"
 
 When the student EXPLICITLY asks for content (e.g. "give me 100 questions", "explain", "list all topics", "make a plan"):
-→ THEN give the full structured response
+-> THEN give the full structured response
 
 SIMPLE TEST before every response:
-Did they ask for information? → Give information.
-Did they share a situation? → Ask about it first. Help second.
-Are they in a conversation? → Stay in the conversation. Do not lecture.`;
+Did they ask for information? -> Give information.
+Did they share a situation? -> Ask about it first. Help second.
+Are they in a conversation? -> Stay in the conversation. Do not lecture.`;
 
   if (ragContext) {
     prompt += `
 
-════════════════════════════════════════
-KNOWLEDGE BASE — YOUR TEACHING MATERIAL
-════════════════════════════════════════
+========================================
+KNOWLEDGE BASE - YOUR TEACHING MATERIAL
+========================================
 ${ragContext}
 
-⚠️ USE the knowledge above as your source.
-⚠️ TRANSFORM it into ${student.name}'s learning style — do NOT copy verbatim.
-⚠️ Deliver it the way a ${student.learning_style} learner needs it.`;
+[WARN]? USE the knowledge above as your source.
+[WARN]? TRANSFORM it into ${student.name}'s learning style - do NOT copy verbatim.
+[WARN]? Deliver it the way a ${student.learning_style} learner needs it.`;
   }
 
-  // Socratic intake — OVERRIDE everything with a simple, laser-focused prompt
+  // Socratic intake - OVERRIDE everything with a simple, laser-focused prompt
   if (intent._socraticInstruction) {
     return `You are ${student.name}'s personal mentor. You are in the middle of understanding their situation before giving advice.
 
-Your ONLY task right now: Ask this one question naturally — "${intent._socraticInstruction}"
+Your ONLY task right now: Ask this one question naturally - "${intent._socraticInstruction}"
 
 Rules:
 - ONE sentence acknowledging what they said (optional, only if natural)
-- Then ask the question — warm, direct, like a friend
+- Then ask the question - warm, direct, like a friend
 - STOP. Nothing else.
 - No bullet points. No tips. No preparation advice. No lists.
 - Maximum 2 sentences total.`;
@@ -919,9 +919,9 @@ Rules:
   if (specialInstruction) {
     prompt += `
 
-════════════════════════════════════════
+========================================
 EMOTION DETECTED: ${student.emotion.toUpperCase()}
-════════════════════════════════════════
+========================================
 PRIORITY INSTRUCTION FOR THIS RESPONSE: ${specialInstruction}
 This overrides your default response style for this one message.`;
   }
@@ -929,9 +929,9 @@ This overrides your default response style for this one message.`;
   return prompt;
 }
 
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 // AI MODEL CALLS
-// ─────────────────────────────────────────────────────────────
+// -------------------------------------------------------------
 async function callAI(model, messages, system) {
   if (model === 'claude') return callClaude(messages, system);
   if (model === 'gemini') return callGemini(messages, system);
