@@ -27,6 +27,17 @@ export default async function handler(req, res) {
     // Step 2: What does this message need?
     const intent = detectIntent(userMessage);
 
+    // Step 2b: Auto-detect emotion from message
+    const emotionData = detectEmotionFromMessage(userMessage, messages.slice(-4));
+    if (emotionData.detected) {
+      console.log('💭 Emotion detected:', emotionData.emotion, '| confidence:', emotionData.confidence + '%');
+      // Override profile emotion with detected emotion if confidence is high enough
+      if (emotionData.confidence >= 40) {
+        student.emotion = emotionData.emotion;
+        student.emotionAdjustments = emotionData.adjustments;
+      }
+    }
+
     // Step 3: Search knowledge base if teaching needed
     let ragContext = '';
     if (intent.needsKnowledge) {
@@ -226,6 +237,131 @@ ${ranked.map((h, i) => `[${i+1}] ${h.fields?.topic || ''} (${h.fields?.content_t
 }
 
 
+
+// ─────────────────────────────────────────────────────────────
+// AUTO EMOTION DETECTOR
+// Reads tone, words, punctuation — no AI call needed
+// ─────────────────────────────────────────────────────────────
+function detectEmotionFromMessage(message, history = []) {
+  const msg = message.toLowerCase().trim();
+  const scores = {};
+
+  const signals = {
+    panicked: {
+      keywords: ['exam tomorrow','exam today','test tomorrow','haven\'t studied',
+        'know nothing','don\'t know anything','running out of time','only hours left',
+        'help me fast','urgent','emergency','please fast','paper tomorrow'],
+      patterns: [/exam.{0,10}tomorrow/i,/test.{0,10}tomorrow/i,/\d+\s*hours?\s*left/i],
+      weight: 3
+    },
+    frustrated: {
+      keywords: ['still don\'t get it','tried everything','been trying','hours and still',
+        'can\'t understand','not getting it','makes no sense','useless','waste of time',
+        'giving up','want to give up','hate this','i\'m stupid','so stupid','too hard'],
+      patterns: [/tried.{0,20}(times|again|still)/i,/\d+\s*(hours?|hrs?).{0,10}(still|and)/i],
+      weight: 2
+    },
+    confused: {
+      keywords: ['don\'t understand','do not understand','confused','not clear',
+        'explain again','can you re-explain','didn\'t get that','lost me',
+        'went over my head','too fast','i\'m lost','huh'],
+      patterns: [/explain.{0,10}again/i,/don.?t.{0,10}(get|understand)/i],
+      weight: 2
+    },
+    anxious: {
+      keywords: ['worried','nervous','scared','anxiety','anxious','what if i fail',
+        'going to fail','stressed','pressure','overwhelming','overwhelmed',
+        'can\'t focus','family pressure','parents will'],
+      patterns: [/what if.{0,20}fail/i,/going to fail/i],
+      weight: 2
+    },
+    demotivated: {
+      keywords: ['what\'s the point','why study','why even bother','no motivation',
+        'not motivated','don\'t feel like','feeling lazy','procrastinating',
+        'nothing matters','bored','i quit','i give up'],
+      patterns: [/why (even|should i|bother)/i,/what.s the point/i],
+      weight: 2
+    },
+    excited: {
+      keywords: ['this is amazing','so cool','love this','finally understand','got it!',
+        'oh wow','makes sense now','it clicked','mind blown','this is so interesting'],
+      patterns: [/finally.{0,10}(get|understand|got)/i,/makes.{0,10}sense.{0,10}now/i],
+      weight: 2
+    },
+    confident: {
+      keywords: ['got it','understood','i get it','clear now','makes sense',
+        'ready for next','what\'s next','next topic','give me harder','challenge me'],
+      patterns: [/what.?s next/i,/(understood|got it|clear now)/i],
+      weight: 1
+    },
+    tired: {
+      keywords: ['tired','exhausted','sleepy','can\'t focus','losing focus',
+        'need a break','been studying all day','burnout','drained','no energy'],
+      patterns: [/studied.{0,20}(all day|hours|long)/i,/need.{0,10}break/i],
+      weight: 2
+    }
+  };
+
+  for (const [emotion, config] of Object.entries(signals)) {
+    let score = 0;
+    for (const keyword of config.keywords) {
+      if (msg.includes(keyword)) score += config.weight;
+    }
+    for (const pattern of config.patterns) {
+      if (pattern.test(msg)) score += config.weight * 1.5;
+    }
+    if (score > 0) scores[emotion] = score;
+  }
+
+  // Short message = likely confused
+  const wordCount = msg.split(' ').length;
+  if (wordCount <= 3 && !scores.confident) {
+    scores.confused = (scores.confused || 0) + 1;
+  }
+
+  // ALL CAPS = panicked or frustrated
+  const capsRatio = (message.match(/[A-Z]/g) || []).length / message.length;
+  if (capsRatio > 0.5 && message.length > 5) {
+    scores.panicked  = (scores.panicked  || 0) + 2;
+    scores.frustrated = (scores.frustrated || 0) + 1;
+  }
+
+  // Repeated confusion in history = frustrated
+  if (history.length >= 2) {
+    const recentMsgs = history.slice(-4).map(m => (m.content || '').toLowerCase());
+    const confusedCount = recentMsgs.filter(m =>
+      m.includes('don\'t understand') || m.includes('confused') || m.includes('explain again')
+    ).length;
+    if (confusedCount >= 2) scores.frustrated = (scores.frustrated || 0) + 3;
+  }
+
+  const dominantEmotion = Object.keys(scores).length > 0
+    ? Object.keys(scores).reduce((a, b) => scores[a] > scores[b] ? a : b)
+    : 'neutral';
+
+  const maxScore = scores[dominantEmotion] || 0;
+  const confidence = Math.min(Math.round((maxScore / 6) * 100), 100);
+
+  const adjustmentMap = {
+    panicked:     { tone: 'calm and urgent',         specialInstruction: 'Start with: "Okay, let\'s focus. Here\'s exactly what you need right now..." Give top 5 key points only. No deep diving.' },
+    frustrated:   { tone: 'empathetic and patient',  specialInstruction: 'Acknowledge their struggle first. Then try a COMPLETELY different angle — new analogy, new example.' },
+    confused:     { tone: 'gentle and clear',         specialInstruction: 'Go back to absolute basics. One concept at a time. Smaller steps. Simpler language.' },
+    anxious:      { tone: 'warm and reassuring',      specialInstruction: 'Address the anxiety in first 2 sentences before any content. Normalise the feeling.' },
+    demotivated:  { tone: 'energising',               specialInstruction: 'Connect this topic to their actual goal first. Make it relevant before explaining.' },
+    excited:      { tone: 'energetic and expansive',  specialInstruction: 'Match their energy! Then take them one level deeper than they expected.' },
+    confident:    { tone: 'peer-level',               specialInstruction: 'Validate quickly then raise the bar: "Great — now try this harder version..."' },
+    tired:        { tone: 'gentle and concise',       specialInstruction: 'Keep response short. End with a rest suggestion.' },
+    neutral:      { tone: 'warm and engaging',        specialInstruction: '' }
+  };
+
+  return {
+    emotion: dominantEmotion,
+    confidence,
+    adjustments: adjustmentMap[dominantEmotion] || adjustmentMap.neutral,
+    detected: dominantEmotion !== 'neutral' && confidence >= 30
+  };
+}
+
 // ─────────────────────────────────────────────────────────────
 // SEARCH WEB VIA TAVILY
 // Called for current affairs, news, exam notifications etc.
@@ -341,6 +477,7 @@ Give 5 flashcards. After all 5 ask: "Want 5 more or shall we practice with quest
   const deliveryFormat = deliveryFormats[intent.content_type] || deliveryFormats.teaching;
   const styleGuide     = styleInstructions[student.learning_style] || styleInstructions.visual;
   const emotionGuide   = emotionGuides[student.emotion?.toLowerCase()] || emotionGuides.neutral;
+  const specialInstruction = student.emotionAdjustments?.specialInstruction || '';
 
   let prompt = `${baseSystem}
 
@@ -388,6 +525,17 @@ ${ragContext}
 ⚠️ USE the knowledge above as your source.
 ⚠️ TRANSFORM it into ${student.name}'s learning style — do NOT copy verbatim.
 ⚠️ Deliver it the way a ${student.learning_style} learner needs it.`;
+  }
+
+  // Inject emotion-based instruction if detected with confidence
+  if (specialInstruction) {
+    prompt += `
+
+════════════════════════════════════════
+EMOTION DETECTED: ${student.emotion.toUpperCase()}
+════════════════════════════════════════
+PRIORITY INSTRUCTION FOR THIS RESPONSE: ${specialInstruction}
+This overrides your default response style for this one message.`;
   }
 
   return prompt;
