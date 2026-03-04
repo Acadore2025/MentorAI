@@ -12,11 +12,6 @@
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
 
-  // Check if client wants streaming
-  const wantsStream = req.headers['accept'] === 'text/event-stream' ||
-                      req.query?.stream === 'true' ||
-                      req.body?.stream === true;
-
   try {
     const body = req.body;
     const messages       = body.messages || [];
@@ -87,13 +82,6 @@ ${webContext}
     // gpt-4o for live web search (accuracy critical)
     // gpt-4o-mini for teaching/concepts (speed + cost)
     const smartModel = webContext ? 'gpt-4o' : 'openai';
-
-    // Stream if requested
-    if (wantsStream) {
-      const modelName = webContext ? 'gpt-4o' : 'gpt-4o-mini';
-      await callOpenAI(finalMessages, systemPrompt, modelName, res);
-      return;
-    }
 
     const response = await callAI(smartModel, finalMessages, systemPrompt);
     return res.status(200).json(response);
@@ -702,72 +690,10 @@ async function callAI(model, messages, system) {
   return callOpenAI(messages, system, 'gpt-4o-mini');
 }
 
-async function callOpenAI(messages, system, modelName = 'gpt-4o-mini', streamRes = null) {
+async function callOpenAI(messages, system, modelName = 'gpt-4o-mini') {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error('OPENAI_API_KEY not configured');
 
-  // ── STREAMING MODE ────────────────────────────────────────
-  if (streamRes) {
-    streamRes.writeHead(200, {
-      'Content-Type':  'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection':    'keep-alive',
-      'Access-Control-Allow-Origin': '*'
-    });
-
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-      body: JSON.stringify({
-        model: modelName,
-        messages: [{ role: 'system', content: system }, ...messages],
-        max_tokens: 1200,
-        temperature: 0.7,
-        stream: true
-      })
-    });
-
-    if (!res.ok) {
-      const err = await res.json();
-      streamRes.write(`data: ${JSON.stringify({ error: err.error?.message || 'OpenAI error' })}\n\n`);
-      streamRes.end();
-      return;
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let fullContent = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n').filter(l => l.startsWith('data: '));
-
-      for (const line of lines) {
-        const data = line.slice(6);
-        if (data === '[DONE]') {
-          streamRes.write(`data: ${JSON.stringify({ done: true, full: fullContent })}\n\n`);
-          streamRes.end();
-          return;
-        }
-        try {
-          const parsed = JSON.parse(data);
-          const token = parsed.choices?.[0]?.delta?.content || '';
-          if (token) {
-            fullContent += token;
-            streamRes.write(`data: ${JSON.stringify({ token })}\n\n`);
-          }
-        } catch(e) { /* skip malformed chunks */ }
-      }
-    }
-
-    streamRes.end();
-    return;
-  }
-
-  // ── NORMAL MODE (fallback) ────────────────────────────────
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
