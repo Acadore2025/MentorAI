@@ -665,15 +665,16 @@ async function loadUserProfile(){
 
     saveProfile();
 
-    // Load long-term memory
+    // Load long-term memory - completely silent, never blocks login
     try {
       const memRes = await fetch('/api/memory?user_id=' + currentUser.id);
-      const memData = await memRes.json();
-      if (memData.hasMemory) {
-        profile.memory = memData.memory;
-        console.log('[MEMORY] Loaded:', memData.memory.last_topic || 'no topic yet');
+      if (memRes.ok) {
+        const memData = await memRes.json();
+        if (memData && memData.hasMemory) {
+          profile.memory = memData.memory;
+        }
       }
-    } catch(e) { console.warn('[MEMORY] Load failed:', e.message); }
+    } catch(e) { /* memory is optional - never block login */ }
 
     // If personality test done -> they are a returning user -> go straight to app
     // Never re-run personality test for existing users
