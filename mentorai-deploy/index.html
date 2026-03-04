@@ -213,9 +213,9 @@ pointer-events:none;z-index:0}
 
 /* Input */
 #input-area{position:relative;z-index:10;border-top:1px solid var(--border);background:rgba(8,10,15,0.94);backdrop-filter:blur(14px);padding:12px 20px 16px}
-.input-wrap{max-width:760px;margin:0 auto;display:flex;gap:8px;align-items:flex-end;background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px 16px;transition:border-color 0.2s,box-shadow 0.2s}.input-wrap:focus-within{box-shadow:0 0 0 2px rgba(232,200,122,0.15)}
+.input-wrap{max-width:760px;margin:0 auto;display:flex;gap:8px;align-items:flex-end;background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:16px 20px;transition:border-color 0.2s,box-shadow 0.2s}.input-wrap:focus-within{box-shadow:0 0 0 2px rgba(232,200,122,0.15)}
 .input-wrap:focus-within{border-color:rgba(232,200,122,0.3)}
-#user-input{flex:1;background:transparent;border:none;outline:none;resize:none;color:var(--text);font-family:'Outfit',sans-serif;font-size:15px;font-weight:300;line-height:1.7;max-height:300px;min-height:44px}
+#user-input{flex:1;background:transparent;border:none;outline:none;resize:none;color:var(--text);font-family:'Outfit',sans-serif;font-size:15px;font-weight:300;line-height:1.7;max-height:300px;min-height:80px}
 #user-input::placeholder{color:var(--muted2)}
 .input-actions{display:flex;gap:6px;align-items:center;flex-shrink:0}
 #voice-btn{width:34px;height:34px;background:var(--surface2);border:1px solid var(--border);border-radius:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:15px;transition:all 0.2s;color:var(--muted)}
@@ -663,7 +663,9 @@ async function loadUserProfile(){
       .order('created_at', { ascending: true }).limit(50);
     messages = (msgs || []).map(m => ({ role: m.role, content: m.content, model: m.model, reason: m.reason }));
 
-    saveProfile();
+    // Save to localStorage only - do NOT write back to Supabase
+    // (we just loaded from Supabase - writing back would overwrite with partial data)
+    localStorage.setItem('mentorProfile', JSON.stringify(profile));
 
     // Load long-term memory - completely silent, never blocks login
     try {
@@ -705,6 +707,8 @@ async function loadUserProfile(){
 // -- SAVE PROFILE TO SUPABASE ---------------------------------
 async function saveProfileToSupabase(){
   if(!currentUser) return;
+  // Safety guard - never overwrite a real profile with empty data
+  if(!profile.name || !profile.personalityType) return;
   await sb.from('user_profiles').upsert({
     id: currentUser.id,
     name: profile.name || '',
