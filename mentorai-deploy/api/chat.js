@@ -14,7 +14,7 @@ export default async function handler(req, res) {
 
   try {
     const body = req.body;
-    const messages       = body.messages || [];
+    let messages         = body.messages || [];
     const studentProfile = body.profile  || {};
     const baseSystem     = body.system   || '';
     const model          = body.model    || 'openai';
@@ -55,6 +55,27 @@ export default async function handler(req, res) {
 
     // Step 4: Build the full teaching prompt
     const systemPrompt = buildTeachingPrompt(baseSystem, student, ragContext, intent, webContext);
+
+    // Step 4b: If socratic mode — inject instruction directly into user message
+    if (intent.mode === 'socratic_intake') {
+      const lastMsg = messages[messages.length - 1];
+      const injected = [
+        ...messages.slice(0, -1),
+        {
+          role: 'user',
+          content: `${lastMsg.content}
+
+[SYSTEM OVERRIDE — HIGHEST PRIORITY]:
+Do NOT give advice, tips, or preparation content yet.
+Ask ONLY 1 question — the single most important diagnostic question.
+Do not list topics. Do not give steps. Do not prepare anything.
+Just acknowledge in one sentence and ask ONE question.
+Example: "Nice — which company is it for?"
+Nothing else. One question only.`
+        }
+      ];
+      messages = injected;
+    }
 
     // Step 5: Inject web context directly into messages if available
     let finalMessages = messages;
