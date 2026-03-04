@@ -93,11 +93,28 @@ function detectIntent(message) {
 
   // Detect if web search is needed
   const webSearchKeywords = [
-    'current affairs','today','latest','recent','news','2024','2025',
+    // Time-based
+    'today','yesterday','this week','this month','this year',
+    'latest','recent','current','now','right now','new',
+    '2024','2025','2026',
+    // News & events
+    'news','happened','update','announce','launch','release',
+    'who is','who won','who became','who got','who is the',
+    // Exams & results
     'exam date','notification','result','cutoff','vacancy','recruitment',
-    'upsc','ssc','ibps','sbi po','neet 2','jee 2','admit card',
-    'who is','who won','election','government','policy','scheme',
-    'price','rate','stock','market','weather','sports','ipl','cricket'
+    'admit card','syllabus change','new pattern','upsc 2','ssc 2',
+    'ibps','sbi po','neet 2','jee 2','cat 2','gate 2',
+    // Government & policy
+    'election','government','policy','scheme','budget','parliament',
+    'prime minister','president','minister','bill','act passed',
+    // Economy & finance
+    'price','rate','repo rate','inflation','gdp','rbi','sebi',
+    'stock','market','sensex','nifty','rupee','dollar',
+    // Sports & entertainment
+    'ipl','cricket','football','olympics','world cup','match',
+    // General knowledge queries
+    'how many','how much','when did','when was','where is',
+    'what happened','tell me about recent','any news'
   ];
   const needsWebSearch = webSearchKeywords.some(k => msg.includes(k));
 
@@ -327,7 +344,9 @@ NON-NEGOTIABLE RULES:
 3. Use ${student.name}'s name at least once naturally
 4. If confused — try a DIFFERENT angle, not the same explanation
 5. You are their personal mentor — warm, patient, specific to THEM
-6. Keep responses focused — do not overwhelm with too much at once`;
+6. Keep responses focused — do not overwhelm with too much at once
+7. NEVER say "I don't have access to real-time data" or "my training cutoff" — you have live web search. USE IT.
+8. If web search results are provided below — USE THEM to answer. Always.`;
 
   if (ragContext) {
     prompt += `
