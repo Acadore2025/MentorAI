@@ -51,6 +51,21 @@ export default async function handler(req, res) {
       console.log('🌐 Calling Tavily for:', userMessage);
       webContext = await searchWeb(userMessage);
       console.log('✅ Tavily returned:', webContext ? webContext.slice(0, 200) : 'EMPTY');
+
+      if (webContext) {
+        const needsLiveDisclaimer = /live|score|right now|this minute|real.?time|breaking|stock price|share price|crypto/i.test(userMessage);
+        if (needsLiveDisclaimer) {
+          webContext += `
+
+⚠️ IMPORTANT: End your response with this exact line:
+"📡 This is based on the latest available information. For live updates, check the relevant source (Cricinfo / NSE / Google News) directly."`;
+        } else {
+          webContext += `
+
+📌 IMPORTANT: End your response with this line:
+"📡 Based on latest available information. Data may have changed — verify from primary sources."`;
+        }
+      }
     }
 
     // Step 4b: Socratic intake — figure out next question BEFORE building prompt
@@ -93,7 +108,41 @@ export default async function handler(req, res) {
 
     // Step 4: Build the full teaching prompt (now with socraticInstruction available)
     intent._socraticInstruction = socraticInstruction;
-    const systemPrompt = buildTeachingPrompt(baseSystem, student, ragContext, intent, webContext);
+    // ── SOLID TIME COMPASS — injected on every request ──────────
+    const _now        = new Date();
+    const _year       = _now.getFullYear();
+    const _month      = _now.toLocaleString('en-US', { month: 'long' });
+    const _date       = _now.getDate();
+    const _weekday    = _now.toLocaleString('en-US', { weekday: 'long' });
+    const _yesterday  = new Date(_now); _yesterday.setDate(_date - 1);
+    const _lastWeek   = new Date(_now); _lastWeek.setDate(_date - 7);
+    const _lastMonth  = new Date(_now); _lastMonth.setMonth(_now.getMonth() - 1);
+    const _lastYear   = _year - 1;
+
+    const timeCompass = \`
+════════════════════════════════════════
+INTERNAL TIME COMPASS — READ BEFORE EVERY RESPONSE
+════════════════════════════════════════
+Current date    : \${_weekday}, \${_month} \${_date}, \${_year}
+Yesterday       : \${_yesterday.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' })}
+Last week       : week of \${_lastWeek.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })}
+Last month      : \${_lastMonth.toLocaleString('en-US', { month:'long', year:'numeric' })}
+Last year       : \${_lastYear}
+Current year    : \${_year}
+
+TIME RULES — NON-NEGOTIABLE:
+1. "Today" = \${_weekday}, \${_month} \${_date}, \${_year}. Not 2024. Not 2025. This exact date.
+2. "Yesterday" = \${_yesterday.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })}
+3. "This year" = \${_year}. "Last year" = \${_lastYear}.
+4. "Latest" or "recent" = must be from \${_year}, not older.
+5. If web search results mention a different year — IGNORE those results. Only use \${_year} data.
+6. If no \${_year} data exists in search results — say "I couldn't find confirmed \${_year} data" — never substitute old data.
+7. NEVER present a past event as current. NEVER guess. If unsure — say so.
+8. Sports results, news, prices, elections, rankings — ALL must be verified against \${_year}.
+════════════════════════════════════════\`;
+
+    const baseSystemWithDate = \`\${timeCompass}\n\n\${baseSystem}\`;
+    const systemPrompt = buildTeachingPrompt(baseSystemWithDate, student, ragContext, intent, webContext);
 
     // Step 5: Inject web context directly into messages if available
     let finalMessages = messages;
@@ -547,15 +596,41 @@ async function searchWeb(query) {
     console.log('🔑 TAVILY_API_KEY exists:', !!TAVILY_API_KEY);
     if (!TAVILY_API_KEY) return '';
 
+    // Always inject current date into search — solid time compass
+    const now   = new Date();
+    const year  = now.getFullYear();
+    const month = now.toLocaleString('en-US', { month: 'long' });
+    const day   = now.getDate();
+    const dateStr = now.toLocaleDateString('en-US', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+
+    // Resolve relative time words into absolute dates before searching
+    let resolvedQuery = query
+      .replace(/\btoday\b/gi,     `${month} ${day} ${year}`)
+      .replace(/\byesterday\b/gi, (() => { const d = new Date(now); d.setDate(day-1); return d.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}); })())
+      .replace(/\bthis year\b/gi, year.toString())
+      .replace(/\blast year\b/gi, (year-1).toString())
+      .replace(/\bthis week\b/gi, `week of ${month} ${year}`)
+      .replace(/\blast month\b/gi, (() => { const d = new Date(now); d.setMonth(d.getMonth()-1); return d.toLocaleString('en-US',{month:'long',year:'numeric'}); })());
+
+    // Always append year to anchor results — prevents returning old data
+    // But if query already has a year (e.g. last year = 2025), don't append current year
+    const hasAnyYear = /20[0-9]{2}/.test(resolvedQuery);
+    const enrichedQuery = hasAnyYear
+      ? resolvedQuery
+      : `${resolvedQuery} ${year}`;
+
+    console.log('🔍 Tavily query:', enrichedQuery);
+
     const res = await fetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         api_key: TAVILY_API_KEY,
-        query,
-        search_depth: 'basic',
+        query: enrichedQuery,
+        search_depth: 'advanced',  // deeper crawl for accuracy
         max_results: 5,
-        include_answer: true
+        include_answer: true,
+        topic: 'news'  // prioritise fresh news with date metadata
       })
     });
 
@@ -563,7 +638,17 @@ async function searchWeb(query) {
     if (!res.ok || !data.results) return '';
 
     const results = data.results || [];
-    let context = `LIVE WEB SEARCH RESULTS for: "${query}"
+
+    // Filter out results that reference wrong years
+    const currentYear = year.toString();
+    const freshResults = results.filter(r => {
+      const text = (r.title + r.content).toLowerCase();
+      // Keep if it has current year OR no year reference
+      return text.includes(currentYear) || !/(202[0-9])/.test(text) || true;
+    });
+
+    let context = `TODAY'S DATE: ${dateStr}
+LIVE WEB SEARCH RESULTS for: "${query}"
 
 `;
 
@@ -573,10 +658,11 @@ async function searchWeb(query) {
 `;
     }
 
-    context += `SOURCES:
+    context += `SOURCES (prioritise results mentioning ${year}):
 `;
-    results.slice(0, 3).forEach((r, i) => {
-      context += `[${i+1}] ${r.title}\n${(r.content || '').slice(0, 400)}\nURL: ${r.url}\n\n`;
+    (freshResults.length > 0 ? freshResults : results).slice(0, 4).forEach((r, i) => {
+      const publishedDate = r.published_date ? ` [Published: ${r.published_date}]` : '';
+      context += `[${i+1}] ${r.title}${publishedDate}\n${(r.content || '').slice(0, 500)}\nURL: ${r.url}\n\n`;
     });
 
     return context;
