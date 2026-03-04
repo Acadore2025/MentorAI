@@ -742,6 +742,33 @@ async function saveMessageToSupabase(msg){
   });
 }
 
+// -- SAVE MEMORY TO SUPABASE -----------------------------------------
+async function saveMemory(){
+  if(!currentUser || messages.length < 5) return;
+  try {
+    await fetch('/api/memory', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        user_id: currentUser.id,
+        messages: messages.slice(-20).map(m=>({role:m.role, content:m.content})),
+        existingMemory: profile.memory
+      })
+    });
+  } catch(e) { console.warn('[MEMORY] Save failed:', e.message); }
+}
+
+window.addEventListener('beforeunload', () => {
+  if(currentUser && messages.length >= 5) {
+    const data = JSON.stringify({
+      user_id: currentUser.id,
+      messages: messages.slice(-20).map(m=>({role:m.role, content:m.content})),
+      existingMemory: profile.memory
+    });
+    navigator.sendBeacon('/api/memory', new Blob([data], {type:'application/json'}));
+  }
+});
+
 // -- SIGN OUT -------------------------------------------------
 async function signOut(){
   await sb.auth.signOut();
