@@ -405,58 +405,58 @@ function detectIntent(message, student = {}, history = []) {
 // -------------------------------------------------------------
 async function searchKnowledge(query, learning_style, subject, content_type) {
   try {
-    const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
-    const PINECONE_HOST    = process.env.PINECONE_HOST;
-    if (!PINECONE_API_KEY || !PINECONE_HOST) return '';
+    const { PINECONE_API_KEY, PINECONE_HOST, OPENAI_API_KEY } = process.env;
 
-    const styleWords = {
-      visual:   'visual diagram draw picture see',
-      hands_on: 'experiment practical hands-on activity try',
-      story:    'story narrative history tell explain',
-      logical:  'logical proof formula derive step-by-step'
-    }[learning_style] || '';
+    if (!PINECONE_API_KEY || !PINECONE_HOST || !OPENAI_API_KEY) {
+      console.error("❌ Missing Keys: Check Vercel Environment Variables");
+      return '';
+    }
 
-    const enrichedQuery = `${query} ${styleWords} ${subject || ''}`.trim();
+    // STEP 1: Turn text into a vector (OpenAI)
+    const embedRes = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json', 
+        'Authorization': `Bearer ${OPENAI_API_KEY}` 
+      },
+      body: JSON.stringify({ input: query, model: 'text-embedding-3-small' })
+    });
+    
+    const embedData = await embedRes.json();
+    if (!embedData.data) throw new Error("Embedding failed");
+    const vector = embedData.data[0].embedding;
 
-    const searchRes = await fetch(`${PINECONE_HOST}/records/search`, {
+    // STEP 2: Query Pinecone using the vector
+    const searchRes = await fetch(`${PINECONE_HOST}/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Api-Key': PINECONE_API_KEY },
       body: JSON.stringify({
-        namespace: 'teaching-content',
-        query: { inputs: { chunk_text: enrichedQuery }, top_k: 8 },
-        fields: ['text', 'subject', 'topic', 'learning_style', 'content_type']
+        namespace: "", // Matches your 'default' namespace
+        vector: vector,
+        topK: 5,
+        includeMetadata: true
       })
     });
 
     const data = await searchRes.json();
-    const hits = data.result?.hits || data.matches || [];
+    const hits = data.matches || [];
+
+    // Debug log for Vercel "Logs" tab
+    console.log(`✅ Pinecone match check: Found ${hits.length} records in default namespace.`);
+
     if (hits.length === 0) return '';
 
-    // Boost results that match student's learning style
-    const ranked = hits
-      .map(h => ({
-        ...h,
-        score: (h._score || 0) +
-               (h.fields?.learning_style === learning_style ? 0.5 : 0) +
-               (h.fields?.content_type   === content_type   ? 0.3 : 0)
-      }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 4);
+    // STEP 3: Format the context (Looking for 'text' or 'chunk_text')
+    const context = hits.map((h, i) => {
+      const meta = h.metadata || {};
+      const content = meta.text || meta.chunk_text || meta.content || "";
+      return `[Reference ${i+1}]: ${content}`;
+    }).join('\n\n');
 
-    const styleLabel = {
-      visual:   'Visual learner - loves diagrams and pictures',
-      hands_on: 'Hands-on learner - needs experiments and real activities',
-      story:    'Story learner - connects through narratives and history',
-      logical:  'Logical learner - wants proofs and step-by-step reasoning'
-    }[learning_style] || 'Visual learner';
-
-    return `STUDENT'S LEARNING STYLE: ${styleLabel}
-
-RETRIEVED KNOWLEDGE (use this content - deliver in their learning style):
-${ranked.map((h, i) => `[${i+1}] ${h.fields?.topic || ''} (${h.fields?.content_type || ''})\n${h.fields?.text || h.fields?.chunk_text || h.metadata?.text || ''}`).join('\n\n---\n\n')}`;
+    return `KNOWLEDGE BASE DATA:\n${context}`;
 
   } catch (err) {
-    console.warn('Pinecone search failed:', err.message);
+    console.error('❌ Pinecone search error:', err.message);
     return '';
   }
 }
