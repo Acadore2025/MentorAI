@@ -415,7 +415,7 @@ async function searchKnowledge(query, learning_style, subject, content_type) {
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
       body: JSON.stringify({ 
         input: query, 
-        model: 'text-embedding-3-large', 
+        model: 'text-embedding-3-small', 
         dimensions: 1024  // Critical fix for your 1024-dim index
       })
     });
