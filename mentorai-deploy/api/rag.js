@@ -1,80 +1,118 @@
 // ============================================================
-// api/rag.js — MentorAI Smart Knowledge Retrieval
+// api/rag.js — MentorAI Vector Retrieval (OpenAI + Pinecone)
 // ============================================================
-// Called by chat.js before every AI response
-// Searches Pinecone using student's learning style + query
-// Returns the RIGHT version of content for THIS student
+// Flow
+// 1. Embed the student query using OpenAI
+// 2. Search Pinecone vector index
+// 3. Return top chunks
+// 4. Build clean context for GPT
 // ============================================================
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'POST only' });
+  }
 
   try {
+
     const {
-      query,                          // student's message
-      learning_style = 'visual',      // from student profile
-      subject_filter = null,          // optional: filter by subject
-      content_type = null,            // optional: 'teaching' | 'flashcards' | 'practice'
+      query,
+      learning_style = 'visual',
+      subject_filter = null,
+      content_type = null,
       topK = 5
     } = req.body;
 
-    if (!query) return res.status(400).json({ error: 'query is required' });
+    if (!query) {
+      return res.status(400).json({ error: 'query is required' });
+    }
 
+    const OPENAI_API_KEY  = process.env.OPENAI_API_KEY;
     const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
     const PINECONE_HOST    = process.env.PINECONE_HOST;
 
-    if (!PINECONE_API_KEY || !PINECONE_HOST) {
-      return res.status(500).json({ error: 'Missing Pinecone env vars' });
+    if (!OPENAI_API_KEY || !PINECONE_API_KEY || !PINECONE_HOST) {
+      return res.status(500).json({ error: 'Missing environment variables' });
     }
 
-    // ── STEP 1: Build a smart search query ───────────────────────
-    // Combine student query with their learning style for better results
-    const enrichedQuery = buildSmartQuery(query, learning_style, subject_filter);
+    // --------------------------------------------------------
+    // STEP 1 — Embed query using OpenAI
+    // --------------------------------------------------------
 
-    // ── STEP 2: Search Pinecone using integrated embedding ────────
-    const searchRes = await fetch(`${PINECONE_HOST}/records/search`, {
-      method: 'POST',
+    const embedRes = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
-        'Api-Key': PINECONE_API_KEY
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${OPENAI_API_KEY}`
       },
       body: JSON.stringify({
-        namespace: 'teaching-content',
-        query: {
-          inputs: { text: enrichedQuery },
-          top_k: topK * 3   // fetch more, then filter by style
-        },
-        fields: ['text', 'subject', 'topic', 'learning_style', 'level', 'exam_relevance', 'content_type']
+        model: "text-embedding-3-small",
+        input: query,
+        dimensions: 1024
       })
     });
 
-    const searchData = await searchRes.json();
-    const matches = searchData.result?.hits || searchData.matches || [];
+    const embedData = await embedRes.json();
+
+    const vector = embedData.data?.[0]?.embedding;
+
+    if (!vector) {
+      throw new Error("Failed to create embedding");
+    }
+
+    // --------------------------------------------------------
+    // STEP 2 — Search Pinecone
+    // --------------------------------------------------------
+
+    const pineconeRes = await fetch(`${PINECONE_HOST}/query`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Api-Key": PINECONE_API_KEY
+      },
+      body: JSON.stringify({
+        vector: vector,
+        topK: topK * 3,
+        includeMetadata: true,
+        namespace: "teaching-content"
+      })
+    });
+
+    const pineconeData = await pineconeRes.json();
+
+    const matches = pineconeData.matches || [];
 
     if (matches.length === 0) {
       return res.status(200).json({
         results: [],
-        context: '',
+        context: "",
         query,
         learning_style,
         found: false
       });
     }
 
-    // ── STEP 3: Smart filtering and ranking ───────────────────────
+    // --------------------------------------------------------
+    // STEP 3 — Rank results
+    // --------------------------------------------------------
+
     const ranked = rankResults(matches, learning_style, content_type);
 
-    // ── STEP 4: Build clean context for the AI ────────────────────
-    const context = buildContext(ranked.slice(0, topK), learning_style);
+    // --------------------------------------------------------
+    // STEP 4 — Build AI context
+    // --------------------------------------------------------
+
+    const context = buildContext(ranked.slice(0, topK));
 
     return res.status(200).json({
       results: ranked.slice(0, topK).map(m => ({
-        text: m.fields?.text || m.metadata?.text || '',
-        subject: m.fields?.subject || m.metadata?.subject || '',
-        topic: m.fields?.topic || m.metadata?.topic || '',
-        learning_style: m.fields?.learning_style || m.metadata?.learning_style || '',
-        content_type: m.fields?.content_type || m.metadata?.content_type || '',
-        score: Math.round((m._score || m.score || 0) * 100) / 100
+        text: m.metadata?.text || "",
+        subject: m.metadata?.subject || "",
+        topic: m.metadata?.topic || "",
+        learning_style: m.metadata?.learning_style || "",
+        content_type: m.metadata?.content_type || "",
+        score: Math.round((m.score || 0) * 100) / 100
       })),
       context,
       query,
@@ -84,89 +122,69 @@ export default async function handler(req, res) {
     });
 
   } catch (err) {
-    console.error('RAG error:', err);
-    // Return empty gracefully — AI will respond without RAG context
+
+    console.error("RAG error:", err);
+
     return res.status(200).json({
       results: [],
-      context: '',
+      context: "",
       found: false,
       error: err.message
     });
+
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// BUILD SMART QUERY
-// Enriches the student's query with their learning style
-// so Pinecone returns the most relevant version
-// ─────────────────────────────────────────────────────────────
-function buildSmartQuery(query, learning_style, subject_filter) {
-  const styleDescriptions = {
-    visual:    'visual diagram chart draw picture see',
-    hands_on:  'hands-on experiment try practical do activity',
-    story:     'story narrative history explain like tell me',
-    logical:   'logical proof mathematical derive formula step by step'
-  };
 
-  const styleWords = styleDescriptions[learning_style] || styleDescriptions.visual;
-  const subjectPart = subject_filter ? `subject: ${subject_filter}` : '';
-
-  return `${query} ${styleWords} ${subjectPart}`.trim();
-}
-
-// ─────────────────────────────────────────────────────────────
+// ============================================================
 // RANK RESULTS
-// Prioritizes results matching student's learning style
-// ─────────────────────────────────────────────────────────────
+// ============================================================
+
 function rankResults(matches, learning_style, content_type) {
+
   return matches
     .map(match => {
-      const matchStyle = match.fields?.learning_style || match.metadata?.learning_style || '';
-      const matchType  = match.fields?.content_type   || match.metadata?.content_type   || '';
-      const baseScore  = match._score || match.score || 0;
 
+      const matchStyle = match.metadata?.learning_style || "";
+      const matchType  = match.metadata?.content_type || "";
+
+      let score = match.score || 0;
       let boost = 0;
 
-      // +50% boost if learning style matches student's style
       if (matchStyle === learning_style) boost += 0.5;
 
-      // +30% boost if content type matches requested type
       if (content_type && matchType === content_type) boost += 0.3;
 
-      // +20% boost for teaching content (main explanation) by default
-      if (!content_type && matchType === 'teaching') boost += 0.2;
+      if (!content_type && matchType === "teaching") boost += 0.2;
 
       return {
         ...match,
-        rankedScore: baseScore * (1 + boost)
+        rankedScore: score * (1 + boost)
       };
+
     })
     .sort((a, b) => b.rankedScore - a.rankedScore);
+
 }
 
-// ─────────────────────────────────────────────────────────────
-// BUILD CONTEXT
-// Formats the retrieved content for injection into AI prompt
-// ─────────────────────────────────────────────────────────────
-function buildContext(results, learning_style) {
-  if (results.length === 0) return '';
 
-  const styleLabel = {
-    visual:   'Visual (diagram-based) learner',
-    hands_on: 'Hands-on (practical) learner',
-    story:    'Story (narrative) learner',
-    logical:  'Logical (proof-based) learner'
-  }[learning_style] || 'Visual learner';
+// ============================================================
+// BUILD CONTEXT FOR GPT
+// ============================================================
 
-  const chunks = results.map((r, i) => {
-    const text = r.fields?.text || r.metadata?.text || '';
-    const topic = r.fields?.topic || r.metadata?.topic || '';
-    const type = r.fields?.content_type || r.metadata?.content_type || '';
-    return `[Knowledge ${i + 1}] ${topic} (${type})\n${text}`;
-  }).join('\n\n---\n\n');
+function buildContext(results) {
 
-  return `STUDENT LEARNING STYLE: ${styleLabel}
+  if (!results.length) return "";
 
-RETRIEVED KNOWLEDGE (use this to teach — adapt to student's style):
-${chunks}`;
+  let context = "KNOWLEDGE BASE RESULTS:\n\n";
+
+  results.forEach((r, i) => {
+
+    const text = r.metadata?.text || "";
+
+    context += `[${i + 1}] ${text}\n\n`;
+
+  });
+
+  return context;
 }
