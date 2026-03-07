@@ -41,6 +41,8 @@ export default async function handler(req, res) {
     // Step 3: Search knowledge base if teaching needed
     let ragContext = '';
     if (intent.needsKnowledge) {
+
+      // Pass the query and other metadata for filtering
       ragContext = await searchKnowledge(userMessage, student.learning_style, intent.subject, intent.content_type);
     }
 
@@ -407,41 +409,38 @@ async function searchKnowledge(query, learning_style, subject, content_type) {
   try {
     const { PINECONE_API_KEY, PINECONE_HOST, OPENAI_API_KEY } = process.env;
 
-    // 1. Convert text to Vector (MUST specify 1024 dimensions)
+    // 1. Convert text to Vector - FORCING 1024 dimensions for your index
     const embedRes = await fetch('https://api.openai.com/v1/embeddings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
       body: JSON.stringify({ 
         input: query, 
-        model: 'text-embedding-3-large', // Use 'large' to support 1024
-        dimensions: 1024                 // This is the critical fix
+        model: 'text-embedding-3-large', 
+        dimensions: 1024  // Critical fix for your 1024-dim index
       })
     });
     
     const embedData = await embedRes.json();
-    if (!embedData.data) {
-      console.error('Embedding failed:', embedData);
-      return '';
-    }
+    if (!embedData.data) return '';
     const vector = embedData.data[0].embedding;
 
-    // 2. Query Pinecone
+    // 2. Query Pinecone (Searching empty namespace "")
     const searchRes = await fetch(`${PINECONE_HOST}/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Api-Key': PINECONE_API_KEY },
       body: JSON.stringify({
         vector: vector,
-        topK: 5,
-        includeMetadata: true
+        topK: 5, // Retrieve top 5 matches
+        includeMetadata: true,
+        namespace: "" 
       })
     });
 
     const data = await searchRes.json();
     const hits = data.matches || [];
+    console.log(`[RETRIEVAL] Found ${hits.length} matches for 1024-dim index.`);
 
-    // Debug log to confirm we are getting hits now
-    console.log(`[RETRIEVAL] Found ${hits.length} matches for 1024-dim index`);
-
+    // 3. Extract text from various possible metadata keys
     const context = hits.map((h, i) => {
       const m = h.metadata || {};
       const text = m.text || m.chunk_text || m.page_content || m.content || "";
@@ -455,7 +454,6 @@ async function searchKnowledge(query, learning_style, subject, content_type) {
     return '';
   }
 }
-
 
 // -------------------------------------------------------------
 // AUTO EMOTION DETECTOR
@@ -903,18 +901,26 @@ RESPONSE LENGTH RULE - STRICT:
 - Never write paragraphs for a conversational message.
 - Match their energy. Short in, short out.`;
 
-  if (ragContext) {
+if (ragContext) {
     prompt += `
+========================================
+PRIMARY KNOWLEDGE SOURCE (FROM STUDENT PDF)
+========================================
+The following information was retrieved from the student's uploaded documents. You MUST prioritize this content over your general training data:
 
-========================================
-KNOWLEDGE BASE - YOUR TEACHING MATERIAL
-========================================
 ${ragContext}
 
 [WARN]? USE the knowledge above as your source.
 [WARN]? TRANSFORM it into ${student.name}'s learning style - do NOT copy verbatim.
-[WARN]? Deliver it the way a ${student.learning_style} learner needs it.`;
+[WARN]? Deliver it the way a ${student.learning_style} learner needs it.
+
+INSTRUCTIONS:
+1. Use the specific facts and data from the source above as your absolute source of truth.
+2. Transform this technical content into a ${student.learning_style} explanation.
+3. Do not mention "The database" or "Source 1"; present it as your own expert knowledge.
+4. If the data above contradicts your training data, follow the data above.`;
   }
+  
 
   // Socratic intake - OVERRIDE everything with a simple, laser-focused prompt
   if (intent._socraticInstruction) {
