@@ -28,36 +28,35 @@ export default async function handler(req, res) {
     // PINECONE SEARCH
     // ===============================
 
-    const response = await fetch(`${host}/records/search`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Api-Key": apiKey
-      },
-      body: JSON.stringify({
-        namespace: "__default__",
-        query: {
-          inputs: { text: query },
-          top_k: 5
-        }
-      })
-    });
-
-    const raw = await response.text();
-
-    console.log("STATUS:", response.status);
-    console.log("RAW RESPONSE:", raw);
-
-    let data;
-
-    try {
-      data = JSON.parse(raw);
-    } catch (e) {
-      console.error("JSON PARSE FAILED");
-      throw e;
+ const response = await fetch(`${process.env.PINECONE_HOST}/records/search`, {
+  method: "POST",
+  headers: {
+    "Api-Key": process.env.PINECONE_API_KEY,
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({
+    query: {
+      inputs: { text: query },
+      top_k: 5
     }
+  })
+});
 
-    const hits = data?.result?.hits || [];
+const raw = await response.text();
+
+console.log("STATUS:", response.status);
+console.log("RAW RESPONSE:", raw);
+
+let data;
+
+try {
+  data = JSON.parse(raw);
+} catch (e) {
+  console.error("JSON PARSE FAILED");
+  throw e;
+}
+
+const hits = data?.result?.hits || [];
 
     console.log("PINECONE MATCHES:", hits.length);
 
