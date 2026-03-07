@@ -407,15 +407,22 @@ async function searchKnowledge(query, learning_style, subject, content_type) {
   try {
     const { PINECONE_API_KEY, PINECONE_HOST, OPENAI_API_KEY } = process.env;
 
-    // 1. Convert text to Vector
+    // 1. Convert text to Vector (MUST specify 1024 dimensions)
     const embedRes = await fetch('https://api.openai.com/v1/embeddings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
-      body: JSON.stringify({ input: query, model: 'text-embedding-3-small' })
+      body: JSON.stringify({ 
+        input: query, 
+        model: 'text-embedding-3-large', // Use 'large' to support 1024
+        dimensions: 1024                 // This is the critical fix
+      })
     });
     
     const embedData = await embedRes.json();
-    if (!embedData.data) return '';
+    if (!embedData.data) {
+      console.error('Embedding failed:', embedData);
+      return '';
+    }
     const vector = embedData.data[0].embedding;
 
     // 2. Query Pinecone
@@ -423,7 +430,6 @@ async function searchKnowledge(query, learning_style, subject, content_type) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Api-Key': PINECONE_API_KEY },
       body: JSON.stringify({
-        namespace: "", // Your default namespace
         vector: vector,
         topK: 5,
         includeMetadata: true
@@ -433,16 +439,13 @@ async function searchKnowledge(query, learning_style, subject, content_type) {
     const data = await searchRes.json();
     const hits = data.matches || [];
 
-    // --- CRITICAL FIX: The Metadata Scanner ---
+    // Debug log to confirm we are getting hits now
+    console.log(`[RETRIEVAL] Found ${hits.length} matches for 1024-dim index`);
+
     const context = hits.map((h, i) => {
       const m = h.metadata || {};
-      // This line checks every common name for the 'text' field
-      const actualText = m.text || m.chunk_text || m.content || m.page_content || "";
-      
-      // LOG THIS: You will see in Vercel exactly what key your data is using
-      console.log(`[DEBUG] Match ${i} keys:`, Object.keys(m));
-      
-      return actualText ? `[Source ${i+1}]: ${actualText}` : '';
+      const text = m.text || m.chunk_text || m.page_content || m.content || "";
+      return text ? `[Source ${i+1}]: ${text}` : '';
     }).filter(t => t !== '').join('\n\n');
 
     return context ? `KNOWLEDGE BASE DATA:\n${context}` : '';
