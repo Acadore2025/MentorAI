@@ -407,31 +407,23 @@ async function searchKnowledge(query, learning_style, subject, content_type) {
   try {
     const { PINECONE_API_KEY, PINECONE_HOST, OPENAI_API_KEY } = process.env;
 
-    if (!PINECONE_API_KEY || !PINECONE_HOST || !OPENAI_API_KEY) {
-      console.error("❌ Missing Keys: Check Vercel Environment Variables");
-      return '';
-    }
-
-    // STEP 1: Turn text into a vector (OpenAI)
+    // 1. Convert text to Vector
     const embedRes = await fetch('https://api.openai.com/v1/embeddings', {
       method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json', 
-        'Authorization': `Bearer ${OPENAI_API_KEY}` 
-      },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
       body: JSON.stringify({ input: query, model: 'text-embedding-3-small' })
     });
     
     const embedData = await embedRes.json();
-    if (!embedData.data) throw new Error("Embedding failed");
+    if (!embedData.data) return '';
     const vector = embedData.data[0].embedding;
 
-    // STEP 2: Query Pinecone using the vector
+    // 2. Query Pinecone
     const searchRes = await fetch(`${PINECONE_HOST}/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Api-Key': PINECONE_API_KEY },
       body: JSON.stringify({
-        namespace: "", // Matches your 'default' namespace
+        namespace: "", // Your default namespace
         vector: vector,
         topK: 5,
         includeMetadata: true
@@ -441,26 +433,25 @@ async function searchKnowledge(query, learning_style, subject, content_type) {
     const data = await searchRes.json();
     const hits = data.matches || [];
 
-    // Debug log for Vercel "Logs" tab
-    console.log(`✅ Pinecone match check: Found ${hits.length} records in default namespace.`);
-
-    if (hits.length === 0) return '';
-
-    // STEP 3: Format the context (Looking for 'text' or 'chunk_text')
+    // --- CRITICAL FIX: The Metadata Scanner ---
     const context = hits.map((h, i) => {
-      const meta = h.metadata || {};
-      const content = meta.text || meta.chunk_text || meta.content || "";
-      return `[Reference ${i+1}]: ${content}`;
-    }).join('\n\n');
+      const m = h.metadata || {};
+      // This line checks every common name for the 'text' field
+      const actualText = m.text || m.chunk_text || m.content || m.page_content || "";
+      
+      // LOG THIS: You will see in Vercel exactly what key your data is using
+      console.log(`[DEBUG] Match ${i} keys:`, Object.keys(m));
+      
+      return actualText ? `[Source ${i+1}]: ${actualText}` : '';
+    }).filter(t => t !== '').join('\n\n');
 
-    return `KNOWLEDGE BASE DATA:\n${context}`;
+    return context ? `KNOWLEDGE BASE DATA:\n${context}` : '';
 
   } catch (err) {
-    console.error('❌ Pinecone search error:', err.message);
+    console.error('RAG Error:', err.message);
     return '';
   }
 }
-
 
 
 // -------------------------------------------------------------
