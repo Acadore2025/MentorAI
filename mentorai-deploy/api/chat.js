@@ -439,6 +439,7 @@ async function searchKnowledge(query, learning_style, subject, content_type) {
     const data = await searchRes.json();
     const hits = data.matches || [];
     console.log(`[RETRIEVAL] Found ${hits.length} matches for 1024-dim index.`);
+    console.log('[PINECONE RAW HITS]', JSON.stringify(hits.map(h => h.metadata), null, 2));
 
     // 3. Extract text from various possible metadata keys
     const context = hits.map((h, i) => {
@@ -446,7 +447,8 @@ async function searchKnowledge(query, learning_style, subject, content_type) {
       const text = m.text || m.chunk_text || m.page_content || m.content || "";
       return text ? `[Source ${i+1}]: ${text}` : '';
     }).filter(t => t !== '').join('\n\n');
-
+console.log('[RAG CONTEXT BUILT]', context ? context.slice(0, 500) : 'EMPTY - no text extracted from metadata');
+return context ? `KNOWLEDGE BASE DATA:\n${context}` : '';
     return context ? `KNOWLEDGE BASE DATA:\n${context}` : '';
 
   } catch (err) {
