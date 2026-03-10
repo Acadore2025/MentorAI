@@ -209,34 +209,134 @@ pointer-events:none;z-index:0}
 .tdot:nth-child(1){background:var(--accent)}
 .tdot:nth-child(2){background:var(--accent2);animation-delay:0.2s}
 .tdot:nth-child(3){background:var(--accent3);animation-delay:0.4s}
-/* Streaming cursor — appears at end of text while tokens arrive */
-.stream-cursor{
-  display:inline-block;
-  width:2px;height:1.1em;
-  background:var(--accent);
-  margin-left:2px;
-  vertical-align:text-bottom;
-  border-radius:1px;
-  animation:cursorBlink 0.8s steps(1) infinite;
-}
-@keyframes cursorBlink{0%,100%{opacity:1}50%{opacity:0}}
 @keyframes tb{0%,60%,100%{transform:translateY(0);opacity:0.3}30%{transform:translateY(-5px);opacity:1}}
 
 /* Input */
-#input-area{position:relative;z-index:10;border-top:1px solid var(--border);background:rgba(8,10,15,0.94);backdrop-filter:blur(14px);padding:12px 20px 16px}
-.input-wrap{max-width:760px;margin:0 auto;display:flex;gap:8px;align-items:flex-end;background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:16px 20px;transition:border-color 0.2s,box-shadow 0.2s}.input-wrap:focus-within{box-shadow:0 0 0 2px rgba(232,200,122,0.15)}
-.input-wrap:focus-within{border-color:rgba(232,200,122,0.3)}
-#user-input{flex:1;background:transparent;border:none;outline:none;resize:none;color:var(--text);font-family:'Outfit',sans-serif;font-size:15px;font-weight:300;line-height:1.7;max-height:300px;min-height:80px}
-#user-input::placeholder{color:var(--muted2)}
-.input-actions{display:flex;gap:6px;align-items:center;flex-shrink:0}
-#voice-btn{width:34px;height:34px;background:var(--surface2);border:1px solid var(--border);border-radius:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:15px;transition:all 0.2s;color:var(--muted)}
-#voice-btn:hover{border-color:var(--accent2);color:var(--accent2)}
-#voice-btn.recording{background:rgba(224,112,112,0.15);border-color:var(--danger);color:var(--danger);animation:pulse 1s infinite}
-@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(224,112,112,0.3)}50%{box-shadow:0 0 0 6px rgba(224,112,112,0)}}
-#send-btn{width:34px;height:34px;background:var(--accent);border:none;border-radius:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.2s;color:#080a0f}
-#send-btn:hover{opacity:0.85;transform:scale(1.05)}
-#send-btn:disabled{opacity:0.3;cursor:not-allowed;transform:none}
-.input-hint{text-align:center;font-size:10.5px;color:var(--muted2);margin-top:6px;max-width:760px;margin-left:auto;margin-right:auto}
+/* ── INPUT AREA — PRODUCTION REDESIGN ─────────────────────── */
+#input-area{
+  position:relative;z-index:10;
+  border-top:1px solid var(--border);
+  background:rgba(8,10,15,0.97);
+  backdrop-filter:blur(20px);
+  padding:12px 20px 14px;
+}
+
+/* Toolbar row above the input box */
+.input-toolbar{
+  max-width:760px;margin:0 auto 8px;
+  display:flex;align-items:center;gap:6px;
+  padding:0 2px;
+}
+.toolbar-chip{
+  display:flex;align-items:center;gap:5px;
+  padding:4px 10px;border-radius:20px;
+  background:var(--surface2);border:1px solid var(--border);
+  font-size:11px;color:var(--muted);font-family:'Outfit',sans-serif;
+  cursor:pointer;transition:all 0.15s;white-space:nowrap;user-select:none;
+}
+.toolbar-chip:hover{border-color:rgba(232,200,122,0.25);color:var(--text);}
+.toolbar-chip.active{background:rgba(232,200,122,0.08);border-color:rgba(232,200,122,0.3);color:var(--accent);}
+.toolbar-chip svg{flex-shrink:0}
+.toolbar-spacer{flex:1}
+/* Character counter */
+.char-counter{
+  font-size:10.5px;color:var(--muted2);font-family:'Outfit',sans-serif;
+  transition:color 0.2s;
+}
+.char-counter.warn{color:var(--danger);}
+
+/* Main input box */
+.input-wrap{
+  max-width:760px;margin:0 auto;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:16px;
+  transition:border-color 0.2s,box-shadow 0.2s;
+  overflow:hidden;
+}
+.input-wrap:focus-within{
+  border-color:rgba(232,200,122,0.35);
+  box-shadow:0 0 0 3px rgba(232,200,122,0.06), 0 4px 24px rgba(0,0,0,0.4);
+}
+
+/* Textarea */
+.input-inner{
+  display:flex;align-items:flex-end;
+  padding:14px 16px 10px;gap:10px;
+}
+#user-input{
+  flex:1;background:transparent;border:none;outline:none;resize:none;
+  color:var(--text);font-family:'Outfit',sans-serif;font-size:15px;
+  font-weight:300;line-height:1.65;
+  max-height:200px;min-height:24px;
+  scrollbar-width:thin;scrollbar-color:var(--surface3) transparent;
+}
+#user-input::placeholder{color:var(--muted2);font-weight:300;}
+#user-input::-webkit-scrollbar{width:4px;}
+#user-input::-webkit-scrollbar-thumb{background:var(--surface3);border-radius:4px;}
+
+/* Bottom bar inside input box */
+.input-bottom-bar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:8px 14px 10px;
+  border-top:1px solid rgba(255,255,255,0.04);
+}
+.input-left-actions{display:flex;align-items:center;gap:4px;}
+.input-right-actions{display:flex;align-items:center;gap:6px;}
+
+/* Icon buttons inside input */
+.input-icon-btn{
+  width:30px;height:30px;border-radius:8px;
+  background:transparent;border:none;
+  color:var(--muted);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  transition:all 0.15s;font-size:14px;
+}
+.input-icon-btn:hover{background:var(--surface2);color:var(--text);}
+.input-icon-btn.active{color:var(--accent2);}
+#voice-btn{width:30px;height:30px;background:transparent;border:none;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.2s;color:var(--muted);}
+#voice-btn:hover{background:var(--surface2);color:var(--text);}
+#voice-btn.recording{background:rgba(224,112,112,0.12);color:var(--danger);animation:pulse 1s infinite;}
+
+/* Keyboard shortcut hint */
+.kbd-hint{
+  font-size:10px;color:var(--muted2);
+  font-family:'Outfit',sans-serif;
+  display:flex;align-items:center;gap:4px;
+}
+kbd{
+  display:inline-flex;align-items:center;justify-content:center;
+  padding:1px 5px;border-radius:4px;
+  background:var(--surface3);border:1px solid rgba(255,255,255,0.08);
+  font-size:9.5px;color:var(--muted);font-family:'Outfit',sans-serif;
+  line-height:1.6;
+}
+
+/* Send button — refined */
+#send-btn{
+  height:34px;padding:0 14px;
+  background:var(--accent);border:none;border-radius:10px;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;
+  flex-shrink:0;transition:all 0.2s;color:#080a0f;
+  font-family:'Outfit',sans-serif;font-size:12px;font-weight:600;
+  letter-spacing:0.3px;
+}
+#send-btn:hover{opacity:0.88;transform:translateY(-1px);box-shadow:0 4px 12px rgba(232,200,122,0.25);}
+#send-btn:active{transform:translateY(0);}
+#send-btn:disabled{opacity:0.25;cursor:not-allowed;transform:none;box-shadow:none;}
+#send-btn .send-label{display:inline;}
+
+/* Typing indicator dot (shows when AI is responding) */
+.input-status{
+  max-width:760px;margin:6px auto 0;
+  min-height:16px;
+  font-size:10.5px;color:var(--muted2);font-family:'Outfit',sans-serif;
+  display:flex;align-items:center;gap:6px;padding:0 4px;
+}
+.input-actions{display:flex;gap:6px;align-items:center;flex-shrink:0;}
+/* voice + send handled above in input redesign */@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(224,112,112,0.3)}50%{box-shadow:0 0 0 6px rgba(224,112,112,0)}}
+/* send btn handled above */
+/* input-hint replaced by .input-status */
 
 /* Routing status */
 #route-status{position:relative;z-index:9;display:none;align-items:center;gap:8px;padding:7px 20px;background:rgba(167,139,250,0.05);border-bottom:1px solid rgba(167,139,250,0.12);font-size:11.5px;color:var(--sage)}
@@ -499,16 +599,68 @@ pointer-events:none;z-index:0}
   </div>
 
   <div id="input-area">
+
+    <!-- Quick-action chips toolbar -->
+    <div class="input-toolbar">
+      <button class="toolbar-chip" onclick="insertChip('Explain ')" title="Ask for explanation">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+        Explain
+      </button>
+      <button class="toolbar-chip" onclick="insertChip('Give me a practice question on ')" title="Practice mode">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+        Practice
+      </button>
+      <button class="toolbar-chip" onclick="insertChip('Summarise ')" title="Summary mode">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+        Summarise
+      </button>
+      <button class="toolbar-chip" onclick="insertChip('Quiz me on ')" title="Flashcard mode">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M12 12h.01"/></svg>
+        Quiz me
+      </button>
+      <button class="toolbar-chip" onclick="insertChip('Make a study plan for ')" title="Study plan">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+        Study plan
+      </button>
+      <div class="toolbar-spacer"></div>
+      <span class="char-counter" id="char-counter"></span>
+    </div>
+
+    <!-- Input box -->
     <div class="input-wrap">
-      <textarea id="user-input" placeholder="Ask your mentor anything..." rows="1"></textarea>
-      <div class="input-actions">
-        <button id="voice-btn" onclick="toggleVoice()" title="Voice input"></button>
-        <button id="send-btn" onclick="sendMessage()">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2L15 22 11 13 2 9l20-7z"/></svg>
-        </button>
+      <div class="input-inner">
+        <textarea id="user-input" placeholder="Ask your mentor anything..." rows="1"></textarea>
+      </div>
+
+      <!-- Bottom bar: left actions + keyboard hint + send -->
+      <div class="input-bottom-bar">
+        <div class="input-left-actions">
+          <button id="voice-btn" onclick="toggleVoice()" title="Voice input" class="input-icon-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10a7 7 0 01-14 0M12 19v3M8 22h8"/></svg>
+          </button>
+          <button class="input-icon-btn" onclick="clearInput()" title="Clear">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>
+          </button>
+        </div>
+
+        <div class="kbd-hint">
+          <kbd>Enter</kbd> send &nbsp;·&nbsp; <kbd>Shift</kbd><kbd>↵</kbd> new line
+        </div>
+
+        <div class="input-right-actions">
+          <button id="send-btn" onclick="sendMessage()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2L15 22 11 13 2 9l20-7z"/></svg>
+            <span class="send-label">Send</span>
+          </button>
+        </div>
       </div>
     </div>
-    <div class="input-hint">Enter to send  Shift+Enter for new line   Voice  Smart AI routing enabled</div>
+
+    <!-- Status line below box -->
+    <div class="input-status" id="input-status">
+      <span id="input-status-text"></span>
+    </div>
+
   </div>
 </div>
 
@@ -1805,8 +1957,10 @@ async function sendMessage(){
     const emotionLabel = reply && window._lastEmotion && window._lastEmotion !== 'neutral'
       ? `Powered by Tavily + OpenAI  Detected: ${window._lastEmotion}`
       : 'Powered by Tavily + OpenAI';
-    // callProxy now handles stream bubble internally — appendBubble renders final formatted version
-    appendBubble('assistant', reply, 'openai', emotionLabel);
+    // Remove stream bubble if it exists (appendBubble will show the final formatted version)
+    const streamBubbles = document.querySelectorAll('.stream-bubble');
+    streamBubbles.forEach(b => b.remove());
+    appendBubble('assistant',reply,'openai', emotionLabel);
     saveMessages();
     saveMessageToSupabase(aiMsg);
     addXP(15);
@@ -1849,153 +2003,66 @@ async function routeQuery(msg){
 
 // -- ALL API CALLS GO THROUGH SECURE VERCEL BACKEND ----------
 // No API keys in the frontend. Ever.
-// Uses SSE streaming so tokens appear in real time
-async function callProxy(model, msgs) {
-  return callProxyStream(model, msgs);
-}
-
-async function callProxyStream(model, msgs) {
-  return new Promise(async (resolve, reject) => {
-
-    // Create the streaming bubble immediately — user sees it start filling
-    const streamBubbleEl = createStreamBubble();
-    let   accumulatedText = '';
-
-    try {
-      const res = await fetch('/api/chat', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          stream:   true,   // ← tells backend to stream
-          messages: msgs.map(m => ({ role: m.role, content: m.content })),
-          system:   buildSystemPrompt(),
-          max_tokens: 1024,
-          profile: {
-            name:             profile.name             || '',
-            personality_type: profile.personalityType  || 'The Grower',
-            learning_style:   profile.learnStyle        || 'visual',
-            academic_level:   profile.role              || 'Student',
-            exam_target:      profile.goal              || 'CBSE',
-            current_emotion:  profile.currentEmotion    || 'neutral',
-            weak_subjects:    profile.weakSubjects       || [],
-            strong_subjects:  profile.strongSubjects     || []
-          }
-        })
-      });
-
-      if (!res.ok) {
-        // Non-2xx — parse error body and reject
-        const errData = await res.json().catch(() => ({}));
-        if (streamBubbleEl) streamBubbleEl.remove();
-        reject(new Error(errData.error || `Server error ${res.status}`));
-        return;
+async function callProxy(model, msgs){
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages: msgs.map(m=>({role:m.role, content:m.content})),
+      system: buildSystemPrompt(),
+      max_tokens: 1024,
+      profile: {
+        name:             profile.name             || '',
+        personality_type: profile.personalityType  || 'The Grower',
+        learning_style:   profile.learnStyle       || 'visual',
+        academic_level:   profile.role             || 'Student',
+        exam_target:      profile.goal             || 'CBSE',
+        current_emotion:  profile.currentEmotion   || 'neutral',
+        weak_subjects:    profile.weakSubjects      || [],
+        strong_subjects:  profile.strongSubjects    || []
       }
-
-      // Read SSE stream token by token
-      const reader  = res.body.getReader();
-      const decoder = new TextDecoder();
-      let   buffer  = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop(); // keep incomplete line
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-
-          // ── Token event: append to bubble ──────────────────
-          if (trimmed.startsWith('data: ')) {
-            try {
-              const json = JSON.parse(trimmed.slice(6));
-              if (json.token) {
-                accumulatedText += json.token;
-                updateStreamBubble(streamBubbleEl, accumulatedText);
-              }
-            } catch (e) { /* skip malformed */ }
-          }
-
-          // ── Complete event: final render + resolve ──────────
-          if (trimmed.startsWith('event: complete')) continue; // header line
-          if (trimmed.startsWith('data: ') && trimmed.includes('"content"')) {
-            try {
-              const json = JSON.parse(trimmed.slice(6));
-              if (json.content !== undefined) {
-                // Replace stream bubble with properly formatted final bubble
-                if (streamBubbleEl) streamBubbleEl.remove();
-                resolve(json.content);
-                return;
-              }
-            } catch (e) { /* not the complete event yet */ }
-          }
-
-          // ── Error event ────────────────────────────────────
-          if (trimmed.startsWith('event: error')) continue;
-          if (trimmed.startsWith('data: ') && trimmed.includes('"error"')) {
-            try {
-              const json = JSON.parse(trimmed.slice(6));
-              if (json.error) {
-                if (streamBubbleEl) streamBubbleEl.remove();
-                reject(new Error(json.error));
-                return;
-              }
-            } catch (e) { /* skip */ }
-          }
-        }
-      }
-
-      // Stream ended without complete event — use accumulated text
-      if (streamBubbleEl) streamBubbleEl.remove();
-      resolve(accumulatedText || '');
-
-    } catch (err) {
-      if (streamBubbleEl) streamBubbleEl.remove();
-      reject(err);
-    }
+    })
   });
+  if(!res.ok){ const e = await res.json().catch(()=>({})); throw new Error(e.error||'Server error'); }
+  const data = await res.json();
+  return data.content || data.reply || '';
 }
 
-// ── Streaming bubble — matches appendBubble structure exactly ──
+// Create a streaming bubble in the chat
 function createStreamBubble() {
-  const wrap = document.getElementById('messages');
-  if (!wrap) return null;
+  const chatEl = document.getElementById('chatMessages') || document.querySelector('.chat-messages') || document.querySelector('[id*="chat"]');
+  if (!chatEl) return null;
 
-  const div = document.createElement('div');
-  div.className = 'message ai';
-  div.id = 'stream-bubble-active';
-
-  const av = document.createElement('div');
-  av.className = 'msg-avatar ai-av';
-  av.textContent = '';
-
-  const mw  = document.createElement('div');
-  mw.className = 'msg-wrap';
-
-  const b = document.createElement('div');
-  b.className = 'bubble stream-bubble';
-  // Start with typing indicator — replaced by text as tokens arrive
-  b.innerHTML = '<div class="typing-ind"><div class="tdot"></div><div class="tdot"></div><div class="tdot"></div></div>';
-
-  mw.appendChild(b);
-  div.appendChild(av);
-  div.appendChild(mw);
-  wrap.appendChild(div);
-  scrollDown();
-  return b; // return the bubble element, not the outer wrapper
+  const bubble = document.createElement('div');
+  bubble.className = 'stream-bubble';
+  bubble.style.cssText = `
+    background: var(--card-bg, #1a1a2e);
+    border: 1px solid var(--border, #333);
+    border-radius: 12px;
+    padding: 16px;
+    margin: 8px 0;
+    max-width: 85%;
+    color: var(--text, #fff);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  `;
+  chatEl.appendChild(bubble);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  return bubble;
 }
 
-// Update streaming bubble — renders markdown progressively
+// Update streaming bubble with new content
 function updateStreamBubble(bubble, content) {
   if (!bubble) return;
-  // Use the same fmt() function as appendBubble for consistent rendering
-  // Add a blinking cursor at the end while streaming
-  bubble.innerHTML = fmt(content) + '<span class="stream-cursor">▋</span>';
-  scrollDown();
+  // Convert markdown-style bold to HTML
+  const formatted = content
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>');
+  bubble.innerHTML = formatted + '<span class="cursor" style="animation:blink 1s infinite"></span>';
+  const chatEl = bubble.parentElement;
+  if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
 }
 
 async function callClaude(msgs){ return callProxy('claude', msgs); }
@@ -2103,7 +2170,19 @@ function removeTyping(id){const e=document.getElementById(id);if(e)e.remove();}
 function showRouteStatus(msg){document.getElementById('route-msg').textContent=msg;document.getElementById('route-status').classList.add('on');}
 function hideRouteStatus(){setTimeout(()=>document.getElementById('route-status').classList.remove('on'),1500);}
 function showError(msg){const wrap=document.getElementById('messages');const e=document.createElement('div');e.className='error-msg';e.textContent=msg;wrap.appendChild(e);scrollDown();}
-function setLoading(v){isLoading=v;document.getElementById('send-btn').disabled=v;}
+function setLoading(v){
+  isLoading=v;
+  const btn = document.getElementById('send-btn');
+  const label = btn?.querySelector('.send-label');
+  btn.disabled=v;
+  if(v){
+    if(label) label.textContent = '...';
+    setInputStatus('Mentor is thinking...');
+  } else {
+    if(label) label.textContent = 'Send';
+    setInputStatus('');
+  }
+}
 function scrollDown(){document.getElementById('chat-container').scrollTop=document.getElementById('chat-container').scrollHeight;}
 
 // ===============================================================
@@ -2387,8 +2466,71 @@ function exportCSV(){
 // TEXTAREA AUTO-RESIZE & KEYBOARD
 // ===============================================================
 const ta = document.getElementById('user-input');
-ta.addEventListener('input',()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,300)+'px';});
-ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}});
+const charCounter = document.getElementById('char-counter');
+const MAX_CHARS = 2000;
+
+ta.addEventListener('input',()=>{
+  // Auto-resize
+  ta.style.height='auto';
+  ta.style.height=Math.min(ta.scrollHeight, 200)+'px';
+
+  // Character counter — only show when approaching limit
+  const len = ta.value.length;
+  if (len > MAX_CHARS * 0.7) {
+    charCounter.textContent = `${len}/${MAX_CHARS}`;
+    charCounter.classList.toggle('warn', len >= MAX_CHARS);
+  } else {
+    charCounter.textContent = '';
+    charCounter.classList.remove('warn');
+  }
+
+  // Enforce max length
+  if (len > MAX_CHARS) ta.value = ta.value.slice(0, MAX_CHARS);
+});
+
+ta.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}
+});
+
+// Focus input on page load when chat is visible
+ta.addEventListener('focus',()=>{
+  document.querySelector('.input-wrap')?.classList.add('focused');
+});
+ta.addEventListener('blur',()=>{
+  document.querySelector('.input-wrap')?.classList.remove('focused');
+});
+
+// ── Quick chip insertion ──────────────────────────────────────
+function insertChip(text) {
+  const current = ta.value.trim();
+  // If textarea already has text, don't overwrite — append chip context
+  ta.value = current ? current : text;
+  ta.focus();
+  // Move cursor to end
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+  ta.style.height='auto';
+  ta.style.height=Math.min(ta.scrollHeight,200)+'px';
+
+  // Highlight active chip briefly
+  document.querySelectorAll('.toolbar-chip').forEach(c => c.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+  setTimeout(()=>event.currentTarget?.classList.remove('active'), 800);
+}
+
+// ── Clear input ───────────────────────────────────────────────
+function clearInput() {
+  ta.value = '';
+  ta.style.height = 'auto';
+  charCounter.textContent = '';
+  charCounter.classList.remove('warn');
+  ta.focus();
+}
+
+// ── Input status line helper ──────────────────────────────────
+function setInputStatus(msg) {
+  const el = document.getElementById('input-status-text');
+  if (el) el.textContent = msg || '';
+}
 
 // ===============================================================
 // INIT
