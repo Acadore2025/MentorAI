@@ -40,28 +40,10 @@ export default async function handler(req, res) {
 
     // Step 3: Search knowledge base if teaching needed
     let ragContext = '';
-    let ragNoContent = false;
     if (intent.needsKnowledge) {
 
-      // Pass mode + recentHistory so RAG can:
-      // - rewrite vague queries ("explain it again") into clean search terms
-      // - use dynamic top_k suited to the student's emotional state/mode
-      // - filter by subject if detected
-      const ragResult = await searchKnowledge(
-        userMessage,
-        student.learning_style,
-        intent.subject,
-        intent.content_type,
-        intent.mode,
-        messages.slice(-4)
-      );
-      ragContext   = ragResult.context;
-      ragNoContent = ragResult.noRelevantContent;
-
-      // Hallucination guard: log when AI will answer with no RAG backing
-      if (ragNoContent) {
-        console.warn('[HALLUCINATION_GUARD] No relevant content found in knowledge base — AI will use general knowledge for:', userMessage.slice(0, 100));
-      }
+      // Pass the query and other metadata for filtering
+      ragContext = await searchKnowledge(userMessage, student.learning_style, intent.subject, intent.content_type);
     }
 
     // Step 3b: Web search if current affairs / news needed
@@ -162,7 +144,7 @@ TIME RULES - NON-NEGOTIABLE:
 ========================================`;
 
     const baseSystemWithDate = `${timeCompass}\n\n${baseSystem}`;
-    const systemPrompt = buildTeachingPrompt(baseSystemWithDate, student, ragContext, intent, webContext, ragNoContent);
+    const systemPrompt = buildTeachingPrompt(baseSystemWithDate, student, ragContext, intent, webContext);
 
     // Step 5: Inject web context directly into messages if available
     let finalMessages = messages;
@@ -191,6 +173,33 @@ ${webContext}
     // gpt-4o for all responses - mini cannot follow complex instructions
     const smartModel = 'gpt-4o';
 
+    // ── Streaming vs non-streaming ────────────────────────────
+    // Frontend sends stream:true to opt in to SSE streaming
+    // Falls back to regular JSON response if not requested
+    const wantsStream = body.stream === true;
+
+    if (wantsStream) {
+      // Set SSE headers — must be set before any write
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no'); // Disable Nginx buffering on Vercel
+      res.flushHeaders();
+
+      try {
+        await streamAI(smartModel, finalMessages, systemPrompt, res);
+      } catch (streamErr) {
+        console.error('Stream error:', streamErr);
+        // Send error as SSE event so frontend can handle it
+        res.write(`event: error\ndata: ${JSON.stringify({ error: streamErr.message })}\n\n`);
+      } finally {
+        res.write('event: done\ndata: [DONE]\n\n');
+        res.end();
+      }
+      return;
+    }
+
+    // Non-streaming fallback (existing behaviour — unchanged)
     const response = await callAI(smartModel, finalMessages, systemPrompt);
     return res.status(200).json(response);
 
@@ -422,220 +431,56 @@ function detectIntent(message, student = {}, history = []) {
 
 // -------------------------------------------------------------
 // SEARCH PINECONE FOR RIGHT CONTENT
-// Now calls the production RAG endpoint which handles:
-// - query rewriting for vague messages
-// - score threshold filtering
-// - dynamic top_k by mode
-// - retry logic on Pinecone timeouts
-// - context window budget
-// Returns { context, noRelevantContent } instead of raw string
-// so chat.js can handle the "no results" case without hallucinating
 // -------------------------------------------------------------
-async function searchKnowledge(query, learning_style, subject, content_type, mode, recentHistory = []) {
+async function searchKnowledge(query, learning_style, subject, content_type) {
   try {
     const { PINECONE_API_KEY, PINECONE_HOST, OPENAI_API_KEY } = process.env;
 
-    if (!PINECONE_API_KEY || !PINECONE_HOST) {
-      console.warn('[RAG] Pinecone env vars missing — skipping knowledge search');
-      return { context: '', noRelevantContent: true };
-    }
-
-    // ── Query Rewriting ──────────────────────────────────────
-    // Rewrites vague follow-ups ("explain it again", "I don't get it")
-    // into clean search queries before hitting Pinecone
-    const cleanQuery = await rewriteQuery(query, recentHistory, OPENAI_API_KEY);
-    console.log(`[RAG] Query: "${query}" → "${cleanQuery}"`);
-
-    // ── Dynamic top_k by mode ────────────────────────────────
-    const topK = getTopK(mode);
-
-    // ── Embed with correct dimensions for your 1024-dim index ──
+    // 1. Convert text to Vector - FORCING 1024 dimensions for your index
     const embedRes = await fetch('https://api.openai.com/v1/embeddings', {
-      method:  'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
-      body: JSON.stringify({
-        input:      cleanQuery,
-        model:      'text-embedding-3-small',
-        dimensions: 1024   // Critical: must match your Pinecone index dimensions
+      body: JSON.stringify({ 
+        input: query, 
+        model: 'text-embedding-3-small', 
+        dimensions: 1024  // Critical fix for your 1024-dim index
       })
     });
-
+    
     const embedData = await embedRes.json();
-    if (!embedData.data) {
-      console.error('[RAG] Embedding failed:', embedData.error?.message || 'unknown');
-      return { context: '', noRelevantContent: true };
-    }
+    if (!embedData.data) return '';
     const vector = embedData.data[0].embedding;
 
-    // ── Pinecone search with subject filter + retry ───────────
-    let pineconeData = await queryPinecone(PINECONE_HOST, PINECONE_API_KEY, vector, topK, subject);
-
-    // Single retry on failure (handles transient timeouts)
-    if (!pineconeData) {
-      console.warn('[RAG] Retrying Pinecone after 500ms...');
-      await new Promise(r => setTimeout(r, 500));
-      pineconeData = await queryPinecone(PINECONE_HOST, PINECONE_API_KEY, vector, topK, subject);
-    }
-
-    if (!pineconeData) {
-      console.error('[RAG] Pinecone unavailable after retry');
-      return { context: '', noRelevantContent: true };
-    }
-
-    const allHits = pineconeData.matches || [];
-
-    // ── Score threshold filtering ─────────────────────────────
-    // Chunks below MIN_SCORE are noise — don't send to AI
-    const MIN_SCORE = 0.55;
-    const hits = allHits.filter(h => (h.score || 0) >= MIN_SCORE);
-    const topScore = allHits[0]?.score || 0;
-
-    console.log(`[RAG] ${allHits.length} raw hits | ${hits.length} passed score ${MIN_SCORE} | top: ${topScore.toFixed(3)}`);
-    console.log('[PINECONE RAW HITS]', JSON.stringify(allHits.map(h => ({ score: h.score, meta: h.metadata })), null, 2));
-
-    // ── noRelevantContent signal ──────────────────────────────
-    // Explicit flag so caller knows to use general knowledge
-    // instead of letting AI silently hallucinate specifics
-    if (hits.length === 0) {
-      console.log('[RAG] No chunks passed threshold — noRelevantContent = true');
-      return { context: '', noRelevantContent: true, topScore };
-    }
-
-    // ── Build context with hard character budget ─────────────
-    // Prevents silent prompt overflow that truncates AI responses
-    const MAX_CONTEXT_CHARS = 3000; // ~750 tokens — safe within max_tokens:1200
-    let context = '';
-    let usedChunks = 0;
-
-    for (let i = 0; i < hits.length; i++) {
-      const m    = hits[i].metadata || {};
-      const text = m.text || m.chunk_text || m.page_content || m.content || '';
-      if (!text) continue;
-
-      const chunk = `[Source ${i + 1}]: ${text}`;
-      if ((context + chunk).length > MAX_CONTEXT_CHARS) {
-        console.log(`[RAG] Context budget reached at chunk ${i + 1}`);
-        break;
-      }
-      context += chunk + '\n\n';
-      usedChunks++;
-    }
-
-    console.log(`[RAG CONTEXT] ${usedChunks} chunks used, ${context.length} chars`);
-
-    if (!context) {
-      return { context: '', noRelevantContent: true };
-    }
-
-    return {
-      context: `KNOWLEDGE BASE DATA:\n${context}`,
-      noRelevantContent: false,
-      topScore
-    };
-
-  } catch (err) {
-    console.error('[RAG] searchKnowledge error:', err.message);
-    return { context: '', noRelevantContent: true };
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// QUERY REWRITER (inline in chat.js — no extra API route needed)
-// Uses GPT-4o-mini to clean up vague student messages
-// Falls back to original query silently on any failure
-// ─────────────────────────────────────────────────────────────
-async function rewriteQuery(query, recentHistory = [], openAiKey) {
-  // Skip rewrite for clear, specific queries — saves cost + latency
-  const isAlreadyClear = query.length > 15 &&
-    !/(it|this|that|again|re-?explain|don.?t get|what do you mean|huh|still|same thing)/i.test(query);
-
-  if (isAlreadyClear || !openAiKey) return query;
-
-  try {
-    const historySnippet = recentHistory
-      .slice(-3)
-      .map(m => `${m.role === 'user' ? 'Student' : 'Mentor'}: ${(m.content || '').slice(0, 150)}`)
-      .join('\n');
-
-    const prompt = `You are rewriting a student's vague message into a clean knowledge-base search query.
-
-Recent conversation:
-${historySnippet || '(no history)'}
-
-Student's message: "${query}"
-
-Write ONE short search query (5-12 words) capturing what concept they need explained.
-Return ONLY the query. No punctuation, no explanation, no quotes.`;
-
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${openAiKey}` },
+    // 2. Query Pinecone (Searching empty namespace "")
+    const searchRes = await fetch(`${PINECONE_HOST}/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Api-Key': PINECONE_API_KEY },
       body: JSON.stringify({
-        model:       'gpt-4o-mini',
-        messages:    [{ role: 'user', content: prompt }],
-        max_tokens:  40,
-        temperature: 0.1
-      })
-    });
-
-    const data = await res.json();
-    const rewritten = data?.choices?.[0]?.message?.content?.trim();
-    return (rewritten && rewritten.length > 3) ? rewritten : query;
-
-  } catch (err) {
-    console.warn('[RAG] Query rewrite failed (non-critical):', err.message);
-    return query;
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// DYNAMIC top_k
-// Fewer chunks for panicked/tired students, more for deep modes
-// ─────────────────────────────────────────────────────────────
-function getTopK(mode) {
-  const map = {
-    exam_panic:  2,
-    tired:       2,
-    flashcards:  3,
-    summary:     4,
-    teaching:    5,
-    practice:    5,
-    comparison:  8,
-    study_plan:  6
-  };
-  return map[mode] || 5;
-}
-
-// ─────────────────────────────────────────────────────────────
-// PINECONE QUERY (isolated for clean retry)
-// ─────────────────────────────────────────────────────────────
-async function queryPinecone(host, apiKey, vector, topK, subject) {
-  try {
-    // Add subject filter if we know the subject and metadata was stored at ingest
-    const filter = subject ? { subject: { '$eq': subject } } : undefined;
-
-    const res = await fetch(`${host}/query`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'Api-Key': apiKey },
-      body: JSON.stringify({
-        vector,
-        topK,
+        vector: vector,
+        topK: 5, // Retrieve top 5 matches
         includeMetadata: true,
-        namespace: '',
-        ...(filter && { filter })
+        namespace: "" 
       })
     });
 
-    if (!res.ok) {
-      console.error(`[RAG] Pinecone HTTP ${res.status}:`, await res.text());
-      return null;
-    }
+    const data = await searchRes.json();
+    const hits = data.matches || [];
+    console.log(`[RETRIEVAL] Found ${hits.length} matches for 1024-dim index.`);
+    console.log('[PINECONE RAW HITS]', JSON.stringify(hits.map(h => h.metadata), null, 2));
 
-    return await res.json();
+    // 3. Extract text from various possible metadata keys
+    const context = hits.map((h, i) => {
+      const m = h.metadata || {};
+      const text = m.text || m.chunk_text || m.page_content || m.content || "";
+      return text ? `[Source ${i+1}]: ${text}` : '';
+    }).filter(t => t !== '').join('\n\n');
+console.log('[RAG CONTEXT BUILT]', context ? context.slice(0, 500) : 'EMPTY - no text extracted from metadata');
+return context ? `KNOWLEDGE BASE DATA:\n${context}` : '';
+    return context ? `KNOWLEDGE BASE DATA:\n${context}` : '';
 
   } catch (err) {
-    console.error('[RAG] queryPinecone fetch error:', err.message);
-    return null;
+    console.error('RAG Error:', err.message);
+    return '';
   }
 }
 
@@ -854,7 +699,7 @@ LIVE WEB SEARCH RESULTS for: "${query}"
 // BUILD THE COMPLETE TEACHING PROMPT
 // This is the heart of MentorAI
 // -------------------------------------------------------------
-function buildTeachingPrompt(baseSystem, student, ragContext, intent, webContext = '', ragNoContent = false) {
+function buildTeachingPrompt(baseSystem, student, ragContext, intent, webContext = '') {
 
   const styleInstructions = {
     visual: `TEACHING STYLE - VISUAL LEARNER:
@@ -1103,17 +948,6 @@ INSTRUCTIONS:
 2. Transform this technical content into a ${student.learning_style} explanation.
 3. Do not mention "The database" or "Source 1"; present it as your own expert knowledge.
 4. If the data above contradicts your training data, follow the data above.`;
-  } else if (ragNoContent) {
-    // Knowledge base was searched but returned nothing relevant
-    // Tell AI to use general knowledge rather than making up specifics
-    prompt += `
-========================================
-KNOWLEDGE BASE: NO RELEVANT CONTENT FOUND
-========================================
-The student's uploaded documents were searched but no relevant content was found for this query.
-Use your general training knowledge to answer.
-Do NOT make up specific facts, page numbers, chapter references, or claim content exists in their documents.
-Answer from your general knowledge as a knowledgeable mentor.`;
   }
   
 
@@ -1209,4 +1043,76 @@ async function callGemini(messages, system) {
   const data = await res.json();
   if (data.error) throw new Error(data.error.message);
   return { content: data.candidates[0].content.parts[0].text, model: 'gemini' };
+}
+
+// -------------------------------------------------------------
+// STREAMING AI CALL
+// Pipes OpenAI SSE stream → Vercel SSE response → browser
+// Each token is sent as: data: {"token":"..."}
+// Frontend reassembles tokens into the full response in real time
+// -------------------------------------------------------------
+async function streamAI(model, messages, system, res) {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) throw new Error('OPENAI_API_KEY not configured');
+
+  const openAIRes = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type':  'application/json',
+      'Authorization': `Bearer ${key}`
+    },
+    body: JSON.stringify({
+      model:       'gpt-4o',
+      messages:    [{ role: 'system', content: system }, ...messages],
+      max_tokens:  1200,
+      temperature: 0.7,
+      stream:      true   // ← this is the key flag
+    })
+  });
+
+  if (!openAIRes.ok) {
+    const errText = await openAIRes.text();
+    throw new Error(`OpenAI stream error ${openAIRes.status}: ${errText}`);
+  }
+
+  // Read the SSE stream from OpenAI line by line
+  const reader  = openAIRes.body.getReader();
+  const decoder = new TextDecoder();
+  let   buffer  = '';
+  let   fullContent = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    // OpenAI sends multiple SSE lines per chunk — process each
+    const lines = buffer.split('\n');
+    buffer = lines.pop(); // keep incomplete last line in buffer
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed === 'data: [DONE]') continue;
+      if (!trimmed.startsWith('data: ')) continue;
+
+      try {
+        const json  = JSON.parse(trimmed.slice(6)); // strip "data: "
+        const token = json.choices?.[0]?.delta?.content;
+        if (!token) continue;
+
+        fullContent += token;
+
+        // Forward token to browser as SSE event
+        res.write(`data: ${JSON.stringify({ token })}\n\n`);
+
+      } catch (e) {
+        // Malformed chunk — skip silently
+      }
+    }
+  }
+
+  // Send the complete assembled content at the end
+  // Frontend uses this to do final markdown rendering
+  res.write(`event: complete\ndata: ${JSON.stringify({ content: fullContent, model: 'openai' })}\n\n`);
 }
