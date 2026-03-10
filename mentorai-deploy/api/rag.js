@@ -12,7 +12,7 @@
 // 8. Structured logging          — hit count + top score on every request
 // ============================================================
 
-const MIN_SCORE      = 0.72;   // Chunks below this are noise — tune if needed
+const MIN_SCORE      = 0.55;   // Chunks below this are noise — tune if needed
 const MAX_CONTEXT_CHARS = 3000; // ~750 tokens — safe budget inside 1200 max_tokens
 const RETRY_DELAY_MS = 500;    // Wait before single retry on timeout
 
