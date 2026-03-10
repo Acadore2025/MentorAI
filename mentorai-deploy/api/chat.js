@@ -486,7 +486,7 @@ async function searchKnowledge(query, learning_style, subject, content_type, mod
 
     // ── Score threshold filtering ─────────────────────────────
     // Chunks below MIN_SCORE are noise — don't send to AI
-    const MIN_SCORE = 0.72;
+    const MIN_SCORE = 0.55;
     const hits = allHits.filter(h => (h.score || 0) >= MIN_SCORE);
     const topScore = allHits[0]?.score || 0;
 
