@@ -12,14 +12,18 @@ const OPENAI_KEY    = process.env.OPENAI_API_KEY;
 
 //  SUPABASE HELPER 
 async function supabase(method, table, body = null, params = '') {
-  const url = `${SUPABASE_URL}/rest/v1/${table}${params}`;
+  // For POST to user_memory — upsert so existing users get updated, not duplicated
+  const isUpsert = method === 'POST' && table === 'user_memory';
+  const url = `${SUPABASE_URL}/rest/v1/${table}${isUpsert ? '?on_conflict=user_id' : ''}${params}`;
   const res = await fetch(url, {
     method,
     headers: {
       'Content-Type':  'application/json',
       'apikey':        SUPABASE_KEY,
       'Authorization': `Bearer ${SUPABASE_KEY}`,
-      'Prefer':        method === 'POST' ? 'return=representation' : ''
+      'Prefer':        isUpsert
+                         ? 'return=representation,resolution=merge-duplicates'
+                         : method === 'POST' ? 'return=representation' : ''
     },
     body: body ? JSON.stringify(body) : null
   });
