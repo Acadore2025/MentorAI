@@ -906,7 +906,8 @@ async function saveMessageToSupabase(msg){
     rag_hit:   msg.rag_hit   || false,
     rag_score: msg.rag_score || null,
     mode:      msg.mode      || 'teaching',
-    subject:   msg.subject   || null
+    subject:   msg.subject   || null,
+    issue:     msg.issue     || null
   });
 }
 
@@ -1967,7 +1968,8 @@ async function sendMessage(){
       rag_hit:   replyMeta.rag_hit   || false,
       rag_score: replyMeta.rag_score || null,
       mode:      replyMeta.mode      || 'teaching',
-      subject:   replyMeta.subject   || null
+      subject:   replyMeta.subject   || null,
+      issue:     replyMeta.issue     || null
     };
     messages.push(aiMsg);
     // Show detected emotion in label if available
