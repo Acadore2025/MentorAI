@@ -269,9 +269,14 @@ export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
 
   // Optional: protect manual triggers
-  if (CRON_SECRET && req.headers['x-cron-secret'] !== CRON_SECRET) {
+  if (CRON_SECRET) {
+    const querySecret = req.query?.secret;
+    const headerSecret = req.headers['x-cron-secret'];
     const authHeader = req.headers.authorization;
-    if (authHeader !== `Bearer ${CRON_SECRET}`) {
+    const validQuery  = querySecret  === CRON_SECRET;
+    const validHeader = headerSecret === CRON_SECRET;
+    const validBearer = authHeader   === `Bearer ${CRON_SECRET}`;
+    if (!validQuery && !validHeader && !validBearer) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
   }
