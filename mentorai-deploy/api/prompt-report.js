@@ -1,10 +1,9 @@
 // ============================================================
 // api/prompt-report.js — MentorAI Prompt Analysis Report
 // ============================================================
-// Sends daily prompt quality report to founders
-// Shows every conversation with full context so you can
-// identify where prompts are failing and fix them
-// Runs at 7:30 AM IST (2:00 AM UTC) — 30 mins after main report
+// Sends daily highlights email to founders
+// Full data available in Supabase — filter by "issue" column
+// Runs at 7:30 AM IST (2:00 AM UTC)
 // ============================================================
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -25,8 +24,7 @@ async function query(table, params = '') {
     }
   });
   if (!res.ok) {
-    const err = await res.text();
-    console.warn(`[PROMPT-REPORT] Supabase query failed:`, err);
+    console.warn(`[PROMPT-REPORT] Supabase query failed`);
     return [];
   }
   return res.json().catch(() => []);
@@ -34,7 +32,7 @@ async function query(table, params = '') {
 
 // ── Get yesterday's date range in IST ───────────────────────
 function getYesterdayIST() {
-  const now = new Date();
+  const now       = new Date();
   const istOffset = 5.5 * 60 * 60 * 1000;
   const istNow    = new Date(now.getTime() + istOffset);
 
@@ -57,197 +55,130 @@ function getYesterdayIST() {
   return { startUTC, endUTC, dateLabel };
 }
 
-// ── Group messages into conversations by user ────────────────
-function groupIntoConversations(messages, profiles) {
-  const byUser = {};
+// ── Build highlights-only HTML email ────────────────────────
+function buildEmailHTML(data, dateLabel) {
+  const {
+    totalMessages, totalConversations, cleanConversations,
+    issueConversations, issueBreakdown, topIssueMessages,
+    subjectsWithNoRAG, profiles
+  } = data;
 
-  messages.forEach(msg => {
-    if (!byUser[msg.user_id]) {
-      const profile = profiles.find(p => p.id === msg.user_id);
-      byUser[msg.user_id] = {
-        userId:   msg.user_id,
-        name:     profile?.name || 'Unknown Student',
-        messages: []
-      };
-    }
-    byUser[msg.user_id].messages.push(msg);
-  });
-
-  // Sort messages within each conversation by time
-  Object.values(byUser).forEach(conv => {
-    conv.messages.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-  });
-
-  return Object.values(byUser);
-}
-
-// ── Identify problem patterns in a conversation ──────────────
-function analyzeConversation(messages) {
-  const issues = [];
-
-  const userMsgs      = messages.filter(m => m.role === 'user');
-  const assistantMsgs = messages.filter(m => m.role === 'assistant');
-
-  // Pattern 1: No RAG hit — AI used general knowledge
-  const noRagHits = assistantMsgs.filter(m => m.rag_hit === false);
-  if (noRagHits.length > 0) {
-    issues.push({
-      type:  '⚠️ No RAG Content',
-      detail: `${noRagHits.length} AI response(s) had no knowledge base content — AI used general knowledge`
-    });
-  }
-
-  // Pattern 2: Repeated questions — student didn't understand
-  const contents = userMsgs.map(m => (m.content || '').toLowerCase());
-  const repeatSignals = contents.filter(c =>
-    c.includes('again') || c.includes('dont understand') ||
-    c.includes("don't understand") || c.includes('explain again') ||
-    c.includes('still confused') || c.includes('not clear')
-  );
-  if (repeatSignals.length > 0) {
-    issues.push({
-      type:   '🔄 Student Confused',
-      detail: `Student asked for re-explanation ${repeatSignals.length} time(s) — prompt may not be explaining clearly enough`
-    });
-  }
-
-  // Pattern 3: Negative emotion detected
-  const negativeEmotions = messages.filter(m =>
-    ['panicked','frustrated','anxious','stressed'].includes(m.emotion)
-  );
-  if (negativeEmotions.length > 0) {
-    issues.push({
-      type:   '😰 Negative Emotion',
-      detail: `Detected: ${[...new Set(negativeEmotions.map(m => m.emotion))].join(', ')}`
-    });
-  }
-
-  // Pattern 4: Short AI responses (possible prompt failure)
-  const shortResponses = assistantMsgs.filter(m => (m.content || '').length < 100);
-  if (shortResponses.length > 0) {
-    issues.push({
-      type:   '📉 Short AI Response',
-      detail: `${shortResponses.length} very short response(s) — may indicate prompt confusion`
-    });
-  }
-
-  return issues;
-}
-
-// ── Build HTML email ─────────────────────────────────────────
-function buildEmailHTML(conversations, dateLabel, stats) {
-
-  const conversationBlocks = conversations.map((conv, idx) => {
-    const issues  = analyzeConversation(conv.messages);
-    const hasIssues = issues.length > 0;
-
-    const messageRows = conv.messages.map(msg => {
-      const isUser = msg.role === 'user';
-      const bgColor = isUser ? '#0f0f1a' : '#1a1a2e';
-      const roleLabel = isUser ? '👤 Student' : '🤖 Mentor';
-      const content = (msg.content || '').slice(0, 400) + ((msg.content || '').length > 400 ? '...' : '');
-
-      const metaTags = [];
-      if (msg.emotion && msg.emotion !== 'neutral') metaTags.push(`😐 ${msg.emotion}`);
-      if (msg.subject) metaTags.push(`📚 ${msg.subject}`);
-      if (msg.mode && msg.mode !== 'teaching') metaTags.push(`🎯 ${msg.mode}`);
-      if (msg.rag_hit === true)  metaTags.push(`✅ RAG hit`);
-      if (msg.rag_hit === false && msg.role === 'assistant') metaTags.push(`⚠️ No RAG`);
-
-      return `
-        <div style="background:${bgColor};border-radius:8px;padding:12px 16px;margin:6px 0">
-          <div style="font-size:11px;color:#6c63ff;font-weight:600;margin-bottom:6px">${roleLabel}
-            ${metaTags.length > 0 ? `<span style="color:#64748b;font-weight:400;margin-left:8px">${metaTags.join(' · ')}</span>` : ''}
-          </div>
-          <div style="font-size:13px;color:#e2e8f0;line-height:1.6">${content.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
-        </div>`;
+  // Issue breakdown rows
+  const issueRows = Object.entries(issueBreakdown)
+    .sort((a, b) => b[1] - a[1])
+    .map(([issue, count]) => {
+      const emoji = {
+        'No RAG content':    '⚠️',
+        'Student confused':  '🔄',
+        'Short AI response': '📉',
+      }[issue] || '🔴';
+      return `<tr>
+        <td style="padding:8px 12px;font-size:14px;color:#e2e8f0">${emoji} ${issue}</td>
+        <td style="padding:8px 12px;font-size:14px;color:#f59e0b;text-align:center;font-weight:600">${count}</td>
+      </tr>`;
     }).join('');
 
-    const issueBlock = hasIssues ? `
-      <div style="background:#1e1b2e;border-left:3px solid #f59e0b;border-radius:0 8px 8px 0;padding:12px 16px;margin:12px 0">
-        <div style="font-size:12px;color:#f59e0b;font-weight:600;margin-bottom:8px">⚡ ISSUES DETECTED — ACTION NEEDED</div>
-        ${issues.map(i => `
-          <div style="margin:4px 0;font-size:13px;color:#e2e8f0">
-            <strong>${i.type}</strong><br>
-            <span style="color:#94a3b8">${i.detail}</span>
-          </div>`).join('')}
-      </div>` : `
-      <div style="background:#0d1f17;border-left:3px solid #22c55e;border-radius:0 8px 8px 0;padding:10px 16px;margin:12px 0">
-        <div style="font-size:12px;color:#22c55e">✅ No issues detected in this conversation</div>
-      </div>`;
-
+  // Top flagged messages — show only user query + issue, no full AI response
+  const flaggedRows = topIssueMessages.slice(0, 10).map(msg => {
+    const profile = profiles.find(p => p.id === msg.user_id);
+    const name    = profile?.name || 'Unknown';
     return `
-      <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:20px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <div>
-            <span style="font-size:15px;font-weight:600;color:#e2e8f0">${conv.name}</span>
-            <span style="font-size:12px;color:#64748b;margin-left:8px">${conv.messages.length} messages</span>
-          </div>
-          <span style="font-size:11px;color:${hasIssues ? '#f59e0b' : '#22c55e'};background:${hasIssues ? '#2d1f00' : '#0d1f17'};padding:4px 10px;border-radius:20px">
-            ${hasIssues ? `${issues.length} issue(s)` : 'Clean'}
-          </span>
+      <div style="background:#1a1a2e;border-left:3px solid #f59e0b;border-radius:0 8px 8px 0;padding:12px 16px;margin:8px 0">
+        <div style="font-size:11px;color:#64748b;margin-bottom:4px">
+          👤 ${name} 
+          ${msg.subject ? `· 📚 ${msg.subject}` : ''}
+          ${msg.mode && msg.mode !== 'teaching' ? `· 🎯 ${msg.mode}` : ''}
         </div>
-        ${issueBlock}
-        <div style="margin-top:12px">
-          <div style="font-size:11px;color:#64748b;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px">Conversation</div>
-          ${messageRows}
-        </div>
+        <div style="font-size:13px;color:#e2e8f0;margin-bottom:6px">"${(msg.content || '').slice(0, 200)}"</div>
+        <div style="font-size:12px;color:#f59e0b">⚡ ${msg.issue}</div>
       </div>`;
   }).join('');
+
+  // Subjects with no RAG
+  const ragSubjectRows = subjectsWithNoRAG.length > 0
+    ? subjectsWithNoRAG.map(s =>
+        `<li style="margin:4px 0;color:#e2e8f0">${s.subject} — <strong style="color:#ef4444">${s.count} queries with no content</strong></li>`
+      ).join('')
+    : '<li style="color:#22c55e">All subjects had RAG content ✅</li>';
 
   return `<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:#0f0f1a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#e2e8f0">
-<div style="max-width:720px;margin:0 auto;padding:24px">
+<div style="max-width:680px;margin:0 auto;padding:24px">
 
   <!-- Header -->
-  <div style="background:linear-gradient(135deg,#f59e0b,#ef4444);border-radius:16px;padding:32px;margin-bottom:24px;text-align:center">
-    <div style="font-size:32px;margin-bottom:8px">🔬</div>
-    <h1 style="margin:0;font-size:22px;color:#fff;font-weight:700">Prompt Analysis Report</h1>
-    <p style="margin:8px 0 0;color:rgba(255,255,255,0.85);font-size:14px">${dateLabel}</p>
-    <p style="margin:4px 0 0;color:rgba(255,255,255,0.65);font-size:12px">Use this to improve prompts, RAG content, and AI behaviour</p>
+  <div style="background:linear-gradient(135deg,#f59e0b,#ef4444);border-radius:16px;padding:28px;margin-bottom:20px;text-align:center">
+    <div style="font-size:28px;margin-bottom:6px">🔬</div>
+    <h1 style="margin:0;font-size:20px;color:#fff;font-weight:700">Prompt Analysis Report</h1>
+    <p style="margin:6px 0 0;color:rgba(255,255,255,0.85);font-size:13px">${dateLabel}</p>
+    <p style="margin:4px 0 0;color:rgba(255,255,255,0.65);font-size:11px">Full data available in Supabase → chat_messages → filter by "issue" column</p>
   </div>
 
-  <!-- Summary Stats -->
-  <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:20px">
-    <h2 style="margin:0 0 16px;font-size:15px;color:#f59e0b;text-transform:uppercase;letter-spacing:1px">📊 Yesterday at a Glance</h2>
+  <!-- Top Line -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:16px">
+    <h2 style="margin:0 0 14px;font-size:14px;color:#f59e0b;text-transform:uppercase;letter-spacing:1px">📊 Yesterday at a Glance</h2>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px">
       ${[
-        ['Conversations', stats.totalConversations],
-        ['Total Messages', stats.totalMessages],
-        ['With Issues', stats.conversationsWithIssues],
-        ['No RAG Hits', stats.noRagCount]
-      ].map(([label, value]) => `
+        ['Total Messages',    totalMessages,        '#4ecdc4'],
+        ['Conversations',     totalConversations,   '#4ecdc4'],
+        ['✅ Clean',          cleanConversations,   '#22c55e'],
+        ['⚠️ With Issues',   issueConversations,   '#f59e0b']
+      ].map(([label, value, color]) => `
         <div style="background:#0f0f1a;border-radius:8px;padding:14px;text-align:center">
-          <div style="font-size:24px;font-weight:700;color:#f59e0b">${value}</div>
+          <div style="font-size:24px;font-weight:700;color:${color}">${value}</div>
           <div style="font-size:11px;color:#94a3b8;margin-top:4px">${label}</div>
         </div>`).join('')}
     </div>
   </div>
 
-  <!-- What to Fix -->
-  <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:24px">
-    <h2 style="margin:0 0 12px;font-size:15px;color:#f59e0b;text-transform:uppercase;letter-spacing:1px">🛠️ What to Fix in Prompts</h2>
-    <ul style="margin:0;padding-left:20px;font-size:14px;line-height:2;color:#e2e8f0">
-      ${stats.noRagCount > 0
-        ? `<li>⚠️ <strong>${stats.noRagCount} responses</strong> had no RAG content — ingest more PDFs for these subjects</li>`
-        : '<li>✅ RAG content found for all responses</li>'}
-      ${stats.confusedCount > 0
-        ? `<li>🔄 <strong>${stats.confusedCount} conversations</strong> had confused students — improve explanation prompts</li>`
-        : ''}
-      ${stats.negativeEmotionCount > 0
-        ? `<li>😰 <strong>${stats.negativeEmotionCount} conversations</strong> had stressed/frustrated students — check emotional support prompts</li>`
-        : ''}
-      ${stats.conversationsWithIssues === 0
-        ? '<li>✅ No major prompt issues detected yesterday</li>'
-        : ''}
+  <!-- Issue Breakdown -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:16px">
+    <h2 style="margin:0 0 14px;font-size:14px;color:#f59e0b;text-transform:uppercase;letter-spacing:1px">⚡ Issue Breakdown</h2>
+    ${Object.keys(issueBreakdown).length > 0 ? `
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr style="border-bottom:1px solid #2d2d44">
+          <th style="padding:8px 12px;text-align:left;color:#64748b;font-size:12px;font-weight:500">Issue Type</th>
+          <th style="padding:8px 12px;text-align:center;color:#64748b;font-size:12px;font-weight:500">Count</th>
+        </tr>
+      </thead>
+      <tbody>${issueRows}</tbody>
+    </table>` : '<p style="color:#22c55e;font-size:14px;margin:0">✅ No issues detected yesterday</p>'}
+  </div>
+
+  <!-- Subjects With No RAG -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:16px">
+    <h2 style="margin:0 0 14px;font-size:14px;color:#f59e0b;text-transform:uppercase;letter-spacing:1px">📚 Subjects Needing More PDFs</h2>
+    <ul style="margin:0;padding-left:20px;font-size:13px;line-height:1.8">
+      ${ragSubjectRows}
     </ul>
   </div>
 
-  <!-- All Conversations -->
-  <h2 style="margin:0 0 16px;font-size:15px;color:#94a3b8;text-transform:uppercase;letter-spacing:1px">💬 All Conversations</h2>
-  ${conversations.length > 0 ? conversationBlocks : '<div style="background:#1a1a2e;border-radius:12px;padding:24px;text-align:center;color:#64748b">No conversations yesterday</div>'}
+  <!-- Top Flagged Messages -->
+  ${topIssueMessages.length > 0 ? `
+  <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:16px">
+    <h2 style="margin:0 0 14px;font-size:14px;color:#f59e0b;text-transform:uppercase;letter-spacing:1px">🔴 Top Flagged Messages</h2>
+    <p style="margin:0 0 12px;font-size:12px;color:#64748b">Showing up to 10 messages that had issues. Full list in Supabase.</p>
+    ${flaggedRows}
+  </div>` : ''}
+
+  <!-- Action Items -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:16px">
+    <h2 style="margin:0 0 14px;font-size:14px;color:#f59e0b;text-transform:uppercase;letter-spacing:1px">🛠️ Action Items for Prompt Engineer</h2>
+    <ul style="margin:0;padding-left:20px;font-size:14px;line-height:2;color:#e2e8f0">
+      ${subjectsWithNoRAG.length > 0
+        ? subjectsWithNoRAG.map(s => `<li>Ingest more <strong>${s.subject}</strong> PDFs into Pinecone (${s.count} failed queries)</li>`).join('')
+        : '<li style="color:#22c55e">✅ RAG coverage looks good</li>'}
+      ${issueBreakdown['Student confused'] > 0
+        ? `<li>Review explanation prompts — ${issueBreakdown['Student confused']} student(s) asked to explain again</li>`
+        : ''}
+      ${issueBreakdown['Short AI response'] > 0
+        ? `<li>Check for prompt failures — ${issueBreakdown['Short AI response']} very short AI response(s) detected</li>`
+        : ''}
+      <li style="color:#64748b">→ Go to Supabase → chat_messages → filter <strong>issue</strong> column for full analysis</li>
+    </ul>
+  </div>
 
   <!-- Footer -->
   <div style="text-align:center;padding:16px;color:#475569;font-size:12px">
@@ -263,7 +194,6 @@ function buildEmailHTML(conversations, dateLabel, stats) {
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'GET only' });
 
-  // Security check
   if (CRON_SECRET) {
     const querySecret  = req.query?.secret;
     const headerSecret = req.headers['x-cron-secret'];
@@ -278,34 +208,57 @@ export default async function handler(req, res) {
 
     console.log('[PROMPT-REPORT] Generating for:', dateLabel);
 
-    // Fetch messages and profiles in parallel
     const [messages, profiles] = await Promise.all([
       query('chat_messages', `?created_at=gte.${startUTC}&created_at=lte.${endUTC}&select=*&order=created_at.asc`),
       query('user_profiles', `?select=id,name`)
     ]);
 
-    console.log('[PROMPT-REPORT] Messages:', messages.length);
+    // Only user messages with issues
+    const userMessages    = messages.filter(m => m.role === 'user');
+    const assistantMsgs   = messages.filter(m => m.role === 'assistant');
+    const messagesWithIssue = messages.filter(m => m.issue && m.issue.trim() !== '');
 
-    // Group into conversations
-    const conversations = groupIntoConversations(messages, profiles);
+    // Unique conversations
+    const allUserIds      = [...new Set(messages.map(m => m.user_id))];
+    const issueUserIds    = [...new Set(messagesWithIssue.map(m => m.user_id))];
+    const cleanConvs      = allUserIds.filter(id => !issueUserIds.includes(id)).length;
 
-    // Calculate stats
-    const analyzed = conversations.map(c => ({
-      ...c,
-      issues: analyzeConversation(c.messages)
-    }));
+    // Issue breakdown
+    const issueBreakdown  = {};
+    messagesWithIssue.forEach(m => {
+      const parts = (m.issue || '').split(' | ');
+      parts.forEach(issue => {
+        issueBreakdown[issue] = (issueBreakdown[issue] || 0) + 1;
+      });
+    });
 
-    const stats = {
-      totalConversations:      conversations.length,
-      totalMessages:           messages.length,
-      conversationsWithIssues: analyzed.filter(c => c.issues.length > 0).length,
-      noRagCount:              messages.filter(m => m.role === 'assistant' && m.rag_hit === false).length,
-      confusedCount:           analyzed.filter(c => c.issues.some(i => i.type.includes('Confused'))).length,
-      negativeEmotionCount:    analyzed.filter(c => c.issues.some(i => i.type.includes('Emotion'))).length
+    // Subjects with no RAG — from assistant messages
+    const noRagMessages   = assistantMsgs.filter(m => m.rag_hit === false && m.subject);
+    const subjectCounts   = {};
+    noRagMessages.forEach(m => {
+      subjectCounts[m.subject] = (subjectCounts[m.subject] || 0) + 1;
+    });
+    const subjectsWithNoRAG = Object.entries(subjectCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([subject, count]) => ({ subject, count }));
+
+    // Top flagged user messages only (not assistant)
+    const topIssueMessages = messagesWithIssue
+      .filter(m => m.role === 'user')
+      .slice(0, 10);
+
+    const data = {
+      totalMessages:       messages.length,
+      totalConversations:  allUserIds.length,
+      cleanConversations:  cleanConvs,
+      issueConversations:  issueUserIds.length,
+      issueBreakdown,
+      topIssueMessages,
+      subjectsWithNoRAG,
+      profiles
     };
 
-    // Build and send email
-    const html = buildEmailHTML(conversations, dateLabel, stats);
+    const html = buildEmailHTML(data, dateLabel);
 
     if (!RESEND_KEY || TO_EMAILS.length === 0) {
       return res.status(200).send(html);
@@ -318,9 +271,9 @@ export default async function handler(req, res) {
         'Authorization': `Bearer ${RESEND_KEY}`
       },
       body: JSON.stringify({
-        from:    FROM_EMAIL || 'MentorAI Reports <reports@acadoreskillsconsulting.com>',
+        from:    FROM_EMAIL,
         to:      TO_EMAILS,
-        subject: `🔬 Prompt Analysis Report — ${dateLabel}`,
+        subject: `🔬 Prompt Analysis — ${dateLabel}`,
         html
       })
     });
@@ -336,7 +289,13 @@ export default async function handler(req, res) {
     return res.status(200).json({
       success: true,
       date:    dateLabel,
-      stats
+      stats: {
+        totalMessages:      messages.length,
+        totalConversations: allUserIds.length,
+        cleanConversations: cleanConvs,
+        issueConversations: issueUserIds.length,
+        topIssues:          Object.keys(issueBreakdown).length
+      }
     });
 
   } catch (err) {
