@@ -86,7 +86,13 @@ function buildEmailHTML(data, dateLabel) {
     totalMessages, newUsers, returningUsers, totalUsers,
     avgMessagesPerUser, subjectBreakdown, emotionBreakdown,
     ragHitRate, ragNoContentRate, hallucinations, avgScore,
-    errors, memoryUsers, topStudents
+    errors, memoryUsers, topStudents,
+    // New fields
+    tokensTotal, tokensPrompt, tokensCompletion,
+    costToday, costThisMonth, avgResponseMs,
+    fastestResponseMs, slowestResponseMs,
+    webSearchCount, modelBreakdown,
+    avgRating, ratedMessages
   } = data;
 
   const subjectRows = subjectBreakdown.map(s =>
@@ -252,6 +258,67 @@ function buildEmailHTML(data, dateLabel) {
     </ul>
   </div>
 
+  <!-- Section 7: Cost & Token Usage -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:24px;margin-bottom:20px">
+    <h2 style="margin:0 0 16px;font-size:16px;color:#6c63ff;text-transform:uppercase;letter-spacing:1px">💰 Cost & Token Usage</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px">
+      ${[
+        ['Tokens Today',    tokensTotal?.toLocaleString() || '0',   '#4ecdc4'],
+        ['Cost Today',      '$' + (costToday || '0.000'),           '#f59e0b'],
+        ['Cost This Month', '$' + (costThisMonth || '0.000'),       '#ef4444']
+      ].map(([label, value, color]) => `
+        <div style="background:#0f0f1a;border-radius:8px;padding:16px;text-align:center">
+          <div style="font-size:24px;font-weight:700;color:${color}">${value}</div>
+          <div style="font-size:12px;color:#94a3b8;margin-top:4px">${label}</div>
+        </div>`).join('')}
+    </div>
+    <div style="background:#0f0f1a;border-radius:8px;padding:12px 16px;font-size:13px;color:#94a3b8;margin-bottom:12px">
+      Prompt tokens: <strong style="color:#e2e8f0">${tokensPrompt?.toLocaleString() || 0}</strong> &nbsp;|&nbsp;
+      Completion tokens: <strong style="color:#e2e8f0">${tokensCompletion?.toLocaleString() || 0}</strong> &nbsp;|&nbsp;
+      Web searches: <strong style="color:#e2e8f0">${webSearchCount || 0}</strong>
+    </div>
+    ${modelBreakdown && modelBreakdown.length > 0 ? `
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <thead>
+        <tr style="border-bottom:1px solid #2d2d44">
+          <th style="padding:8px 12px;text-align:left;color:#64748b;font-weight:500">Model</th>
+          <th style="padding:8px 12px;text-align:center;color:#64748b;font-weight:500">Messages</th>
+          <th style="padding:8px 12px;text-align:center;color:#64748b;font-weight:500">Tokens</th>
+          <th style="padding:8px 12px;text-align:center;color:#64748b;font-weight:500">Cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${modelBreakdown.map(m => `
+        <tr>
+          <td style="padding:6px 12px;color:#e2e8f0">${m.model}</td>
+          <td style="padding:6px 12px;text-align:center">${m.count}</td>
+          <td style="padding:6px 12px;text-align:center">${m.tokens?.toLocaleString() || 0}</td>
+          <td style="padding:6px 12px;text-align:center;color:#f59e0b">$${m.cost}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>` : '<p style="color:#64748b;font-size:14px;margin:0">No model data yet</p>'}
+  </div>
+
+  <!-- Section 8: Performance -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:24px;margin-bottom:20px">
+    <h2 style="margin:0 0 16px;font-size:16px;color:#6c63ff;text-transform:uppercase;letter-spacing:1px">⚡ AI Response Performance</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:12px">
+      ${[
+        ['Avg Response',     avgResponseMs    ? (avgResponseMs/1000).toFixed(1)+'s'    : 'N/A', '#4ecdc4'],
+        ['Fastest',          fastestResponseMs ? (fastestResponseMs/1000).toFixed(1)+'s' : 'N/A', '#22c55e'],
+        ['Slowest',          slowestResponseMs ? (slowestResponseMs/1000).toFixed(1)+'s' : 'N/A', '#ef4444']
+      ].map(([label, value, color]) => `
+        <div style="background:#0f0f1a;border-radius:8px;padding:16px;text-align:center">
+          <div style="font-size:24px;font-weight:700;color:${color}">${value}</div>
+          <div style="font-size:12px;color:#94a3b8;margin-top:4px">${label}</div>
+        </div>`).join('')}
+    </div>
+    <div style="background:#0f0f1a;border-radius:8px;padding:12px 16px;font-size:13px;color:#94a3b8">
+      Student Ratings: <strong style="color:#e2e8f0">${ratedMessages || 0} rated</strong> &nbsp;|&nbsp;
+      Avg Rating: <strong style="color:${avgRating >= 0.5 ? '#22c55e' : '#f59e0b'}">${avgRating !== null ? (avgRating > 0 ? '👍 Positive' : avgRating < 0 ? '👎 Negative' : 'Neutral') : 'No ratings yet'}</strong>
+    </div>
+  </div>
+
   <!-- Footer -->
   <div style="text-align:center;padding:16px;color:#475569;font-size:12px">
     MentorAI — Automated Daily Report &nbsp;|&nbsp; mentor-ai-swart.vercel.app
@@ -396,6 +463,55 @@ export default async function handler(req, res) {
     // ── API errors (approximate) ─────────────────────────────
     const errors = 0; // Will improve with error logging table
 
+    // ── Cost & token calculations from new columns ──────────
+    const assistantWithTokens = assistantMessages.filter(m => m.tokens_total > 0);
+    const tokensTotal    = assistantWithTokens.reduce((s, m) => s + (m.tokens_total || 0), 0);
+    const tokensPrompt   = assistantWithTokens.reduce((s, m) => s + (m.tokens_prompt || 0), 0);
+    const tokensCompletion = assistantWithTokens.reduce((s, m) => s + (m.tokens_completion || 0), 0);
+    const costToday      = assistantWithTokens.reduce((s, m) => s + (m.cost_usd || 0), 0).toFixed(4);
+    const webSearchCount = assistantMessages.filter(m => m.web_search_used === true).length;
+
+    // This month's cost
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+    const monthMessages = await query('chat_messages',
+      `?created_at=gte.${monthStart.toISOString()}&role=eq.assistant&select=cost_usd`
+    );
+    const costThisMonth = monthMessages.reduce((s, m) => s + (m.cost_usd || 0), 0).toFixed(4);
+
+    // Model breakdown
+    const modelMap = {};
+    assistantMessages.forEach(m => {
+      const model = m.model_used || 'unknown';
+      if (!modelMap[model]) modelMap[model] = { count: 0, tokens: 0, cost: 0 };
+      modelMap[model].count  += 1;
+      modelMap[model].tokens += m.tokens_total || 0;
+      modelMap[model].cost   += m.cost_usd     || 0;
+    });
+    const modelBreakdown = Object.entries(modelMap)
+      .sort((a, b) => b[1].count - a[1].count)
+      .map(([model, d]) => ({ model, count: d.count, tokens: d.tokens, cost: d.cost.toFixed(4) }));
+
+    // ── Performance metrics ───────────────────────────────────
+    const responseTimes = assistantMessages.filter(m => m.response_time_ms > 0).map(m => m.response_time_ms);
+    const avgResponseMs     = responseTimes.length > 0 ? Math.round(responseTimes.reduce((a,b) => a+b, 0) / responseTimes.length) : null;
+    const fastestResponseMs = responseTimes.length > 0 ? Math.min(...responseTimes) : null;
+    const slowestResponseMs = responseTimes.length > 0 ? Math.max(...responseTimes) : null;
+
+    // ── Rating metrics ────────────────────────────────────────
+    const ratedMsgs   = assistantMessages.filter(m => m.rating !== 0 && m.rating !== null);
+    const ratedMessages = ratedMsgs.length;
+    const avgRating   = ratedMessages > 0
+      ? ratedMsgs.reduce((s, m) => s + (m.rating || 0), 0) / ratedMessages
+      : null;
+
+    // ── RAG metrics from real data ────────────────────────────
+    const ragMessages  = assistantMessages.filter(m => m.rag_hit !== null);
+    const realRagHitRate = ragMessages.length > 0
+      ? Math.round((ragMessages.filter(m => m.rag_hit === true).length / ragMessages.length) * 100)
+      : ragHitRate;
+
     // ── Assemble report data ─────────────────────────────────
     const reportData = {
       totalMessages,
@@ -405,13 +521,26 @@ export default async function handler(req, res) {
       avgMessagesPerUser,
       subjectBreakdown,
       emotionBreakdown,
-      ragHitRate,
-      ragNoContentRate,
+      ragHitRate: realRagHitRate,
+      ragNoContentRate: 100 - realRagHitRate,
       hallucinations,
       avgScore,
       errors,
       memoryUsers: memories.length,
-      topStudents
+      topStudents,
+      // New fields
+      tokensTotal,
+      tokensPrompt,
+      tokensCompletion,
+      costToday,
+      costThisMonth,
+      avgResponseMs,
+      fastestResponseMs,
+      slowestResponseMs,
+      webSearchCount,
+      modelBreakdown,
+      avgRating,
+      ratedMessages
     };
 
     // ── Build HTML ───────────────────────────────────────────
