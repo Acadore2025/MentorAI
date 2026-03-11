@@ -191,7 +191,10 @@ ${webContext}
     // gpt-4o for all responses - mini cannot follow complex instructions
     const smartModel = 'gpt-4o';
 
+    // Start timer for response_time_ms
+    const _responseStart = Date.now();
     const response = await callAI(smartModel, finalMessages, systemPrompt);
+    const _responseTimeMs = Date.now() - _responseStart;
 
     // Detect issues for prompt analysis — saved to chat_messages.issue column
     const issues = [];
@@ -203,14 +206,44 @@ ${webContext}
     const negativeEmotions = ['panicked','frustrated','anxious','stressed'];
     if (negativeEmotions.includes(emotionData.emotion)) issues.push(`Negative emotion: ${emotionData.emotion}`);
 
+    // Calculate cost based on model and token usage
+    // Pricing per 1M tokens (as of March 2026)
+    const MODEL_PRICING = {
+      'gpt-4o':            { input: 2.50,  output: 10.00 },
+      'gpt-4o-mini':       { input: 0.15,  output: 0.60  },
+      'claude-3-5-haiku':  { input: 0.80,  output: 4.00  },
+      'gemini-1.5-flash':  { input: 0.075, output: 0.30  }
+    };
+    const usage    = response.usage || {};
+    const pricing  = MODEL_PRICING[smartModel] || MODEL_PRICING['gpt-4o'];
+    const promptTokens     = usage.prompt_tokens     || usage.input_tokens  || 0;
+    const completionTokens = usage.completion_tokens || usage.output_tokens || 0;
+    const totalTokens      = usage.total_tokens || (promptTokens + completionTokens);
+    const costUSD = (
+      (promptTokens     / 1_000_000) * pricing.input +
+      (completionTokens / 1_000_000) * pricing.output
+    );
+
     // Add metadata for frontend to save to Supabase
     response.meta = {
+      // Existing fields
       emotion:   emotionData.detected ? emotionData.emotion : student.emotion || 'neutral',
       rag_hit:   !ragNoContent && !!ragContext,
       rag_score: null,
       mode:      intent.mode    || 'teaching',
       subject:   intent.subject || null,
-      issue:     issues.length > 0 ? issues.join(' | ') : null
+      issue:     issues.length > 0 ? issues.join(' | ') : null,
+      // New fields
+      rating:            0,
+      session_id:        null,  // set by frontend per session
+      response_time_ms:  _responseTimeMs,
+      model_used:        smartModel,
+      web_search_used:   !!webContext,
+      rag_score_actual:  null,  // populated by rag.js in future
+      tokens_prompt:     promptTokens     || null,
+      tokens_completion: completionTokens || null,
+      tokens_total:      totalTokens      || null,
+      cost_usd:          parseFloat(costUSD.toFixed(6)) || null
     };
 
     return res.status(200).json(response);
