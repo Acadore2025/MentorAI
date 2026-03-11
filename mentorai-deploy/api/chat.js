@@ -193,13 +193,24 @@ ${webContext}
 
     const response = await callAI(smartModel, finalMessages, systemPrompt);
 
-    // Add metadata for prompt analysis report — saves to chat_messages table
+    // Detect issues for prompt analysis — saved to chat_messages.issue column
+    const issues = [];
+    if (ragNoContent)                              issues.push('No RAG content');
+    if (!ragNoContent && !ragContext)              issues.push('No RAG content');
+    if ((response.content || '').length < 100)    issues.push('Short AI response');
+    const confusedSignals = ['again','dont understand',"don't understand",'explain again','still confused','not clear'];
+    if (confusedSignals.some(k => userMessage.toLowerCase().includes(k))) issues.push('Student confused');
+    const negativeEmotions = ['panicked','frustrated','anxious','stressed'];
+    if (negativeEmotions.includes(emotionData.emotion)) issues.push(`Negative emotion: ${emotionData.emotion}`);
+
+    // Add metadata for frontend to save to Supabase
     response.meta = {
       emotion:   emotionData.detected ? emotionData.emotion : student.emotion || 'neutral',
       rag_hit:   !ragNoContent && !!ragContext,
       rag_score: null,
       mode:      intent.mode    || 'teaching',
-      subject:   intent.subject || null
+      subject:   intent.subject || null,
+      issue:     issues.length > 0 ? issues.join(' | ') : null
     };
 
     return res.status(200).json(response);
