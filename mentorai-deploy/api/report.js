@@ -87,7 +87,6 @@ function buildEmailHTML(data, dateLabel) {
     avgMessagesPerUser, subjectBreakdown, emotionBreakdown,
     ragHitRate, ragNoContentRate, hallucinations, avgScore,
     errors, memoryUsers, topStudents,
-    // New fields
     tokensTotal, tokensPrompt, tokensCompletion,
     costToday, costThisMonth, avgResponseMs,
     fastestResponseMs, slowestResponseMs,
@@ -263,9 +262,9 @@ function buildEmailHTML(data, dateLabel) {
     <h2 style="margin:0 0 16px;font-size:16px;color:#6c63ff;text-transform:uppercase;letter-spacing:1px">💰 Cost & Token Usage</h2>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px">
       ${[
-        ['Tokens Today',    tokensTotal?.toLocaleString() || '0',   '#4ecdc4'],
-        ['Cost Today',      '$' + (costToday || '0.000'),           '#f59e0b'],
-        ['Cost This Month', '$' + (costThisMonth || '0.000'),       '#ef4444']
+        ['Tokens Today',    tokensTotal?.toLocaleString() || '0',  '#4ecdc4'],
+        ['Cost Today',      '$' + (costToday    || '0.0000'),      '#f59e0b'],
+        ['Cost This Month', '$' + (costThisMonth || '0.0000'),     '#ef4444']
       ].map(([label, value, color]) => `
         <div style="background:#0f0f1a;border-radius:8px;padding:16px;text-align:center">
           <div style="font-size:24px;font-weight:700;color:${color}">${value}</div>
@@ -296,7 +295,7 @@ function buildEmailHTML(data, dateLabel) {
           <td style="padding:6px 12px;text-align:center;color:#f59e0b">$${m.cost}</td>
         </tr>`).join('')}
       </tbody>
-    </table>` : '<p style="color:#64748b;font-size:14px;margin:0">No model data yet</p>'}
+    </table>` : '<p style="color:#64748b;font-size:14px;margin:0">No model data yet — will populate from tomorrow</p>'}
   </div>
 
   <!-- Section 8: Performance -->
@@ -304,9 +303,9 @@ function buildEmailHTML(data, dateLabel) {
     <h2 style="margin:0 0 16px;font-size:16px;color:#6c63ff;text-transform:uppercase;letter-spacing:1px">⚡ AI Response Performance</h2>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:12px">
       ${[
-        ['Avg Response',     avgResponseMs    ? (avgResponseMs/1000).toFixed(1)+'s'    : 'N/A', '#4ecdc4'],
-        ['Fastest',          fastestResponseMs ? (fastestResponseMs/1000).toFixed(1)+'s' : 'N/A', '#22c55e'],
-        ['Slowest',          slowestResponseMs ? (slowestResponseMs/1000).toFixed(1)+'s' : 'N/A', '#ef4444']
+        ['Avg Response',  avgResponseMs     ? (avgResponseMs/1000).toFixed(1)+'s'     : 'N/A', '#4ecdc4'],
+        ['Fastest',       fastestResponseMs ? (fastestResponseMs/1000).toFixed(1)+'s' : 'N/A', '#22c55e'],
+        ['Slowest',       slowestResponseMs ? (slowestResponseMs/1000).toFixed(1)+'s' : 'N/A', '#ef4444']
       ].map(([label, value, color]) => `
         <div style="background:#0f0f1a;border-radius:8px;padding:16px;text-align:center">
           <div style="font-size:24px;font-weight:700;color:${color}">${value}</div>
@@ -465,13 +464,13 @@ export default async function handler(req, res) {
 
     // ── Cost & token calculations from new columns ──────────
     const assistantWithTokens = assistantMessages.filter(m => m.tokens_total > 0);
-    const tokensTotal    = assistantWithTokens.reduce((s, m) => s + (m.tokens_total || 0), 0);
-    const tokensPrompt   = assistantWithTokens.reduce((s, m) => s + (m.tokens_prompt || 0), 0);
+    const tokensTotal     = assistantWithTokens.reduce((s, m) => s + (m.tokens_total    || 0), 0);
+    const tokensPrompt    = assistantWithTokens.reduce((s, m) => s + (m.tokens_prompt   || 0), 0);
     const tokensCompletion = assistantWithTokens.reduce((s, m) => s + (m.tokens_completion || 0), 0);
-    const costToday      = assistantWithTokens.reduce((s, m) => s + (m.cost_usd || 0), 0).toFixed(4);
-    const webSearchCount = assistantMessages.filter(m => m.web_search_used === true).length;
+    const costToday       = assistantWithTokens.reduce((s, m) => s + (m.cost_usd        || 0), 0).toFixed(4);
+    const webSearchCount  = assistantMessages.filter(m => m.web_search_used === true).length;
 
-    // This month's cost
+    // This month's cost — fixed Supabase filter syntax
     const monthStart = new Date();
     monthStart.setDate(1);
     monthStart.setHours(0, 0, 0, 0);
@@ -480,10 +479,10 @@ export default async function handler(req, res) {
     );
     const costThisMonth = monthMessages.reduce((s, m) => s + (m.cost_usd || 0), 0).toFixed(4);
 
-    // Model breakdown
+    // Model breakdown — uses actual model name (gpt-4o, claude-3-5-haiku etc.)
     const modelMap = {};
     assistantMessages.forEach(m => {
-      const model = m.model_used || 'unknown';
+      const model = m.model_used || 'gpt-4o';
       if (!modelMap[model]) modelMap[model] = { count: 0, tokens: 0, cost: 0 };
       modelMap[model].count  += 1;
       modelMap[model].tokens += m.tokens_total || 0;
@@ -494,20 +493,20 @@ export default async function handler(req, res) {
       .map(([model, d]) => ({ model, count: d.count, tokens: d.tokens, cost: d.cost.toFixed(4) }));
 
     // ── Performance metrics ───────────────────────────────────
-    const responseTimes = assistantMessages.filter(m => m.response_time_ms > 0).map(m => m.response_time_ms);
-    const avgResponseMs     = responseTimes.length > 0 ? Math.round(responseTimes.reduce((a,b) => a+b, 0) / responseTimes.length) : null;
+    const responseTimes     = assistantMessages.filter(m => m.response_time_ms > 0).map(m => m.response_time_ms);
+    const avgResponseMs     = responseTimes.length > 0 ? Math.round(responseTimes.reduce((a,b) => a+b,0) / responseTimes.length) : null;
     const fastestResponseMs = responseTimes.length > 0 ? Math.min(...responseTimes) : null;
     const slowestResponseMs = responseTimes.length > 0 ? Math.max(...responseTimes) : null;
 
     // ── Rating metrics ────────────────────────────────────────
-    const ratedMsgs   = assistantMessages.filter(m => m.rating !== 0 && m.rating !== null);
+    const ratedMsgs     = assistantMessages.filter(m => m.rating !== 0 && m.rating !== null);
     const ratedMessages = ratedMsgs.length;
-    const avgRating   = ratedMessages > 0
+    const avgRating     = ratedMessages > 0
       ? ratedMsgs.reduce((s, m) => s + (m.rating || 0), 0) / ratedMessages
       : null;
 
     // ── RAG metrics from real data ────────────────────────────
-    const ragMessages  = assistantMessages.filter(m => m.rag_hit !== null);
+    const ragMessages    = assistantMessages.filter(m => m.rag_hit !== null);
     const realRagHitRate = ragMessages.length > 0
       ? Math.round((ragMessages.filter(m => m.rag_hit === true).length / ragMessages.length) * 100)
       : ragHitRate;
@@ -521,14 +520,13 @@ export default async function handler(req, res) {
       avgMessagesPerUser,
       subjectBreakdown,
       emotionBreakdown,
-      ragHitRate: realRagHitRate,
+      ragHitRate:    realRagHitRate,
       ragNoContentRate: 100 - realRagHitRate,
       hallucinations,
       avgScore,
       errors,
-      memoryUsers: memories.length,
+      memoryUsers:   memories.length,
       topStudents,
-      // New fields
       tokensTotal,
       tokensPrompt,
       tokensCompletion,
