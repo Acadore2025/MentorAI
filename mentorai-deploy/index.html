@@ -897,11 +897,16 @@ async function saveProfileToSupabase(){
 async function saveMessageToSupabase(msg){
   if(!currentUser) return;
   await sb.from('chat_messages').insert({
-    user_id: currentUser.id,
-    role: msg.role,
-    content: msg.content,
-    model: msg.model || null,
-    reason: msg.reason || null
+    user_id:   currentUser.id,
+    role:      msg.role,
+    content:   msg.content,
+    model:     msg.model     || null,
+    reason:    msg.reason    || null,
+    emotion:   msg.emotion   || 'neutral',
+    rag_hit:   msg.rag_hit   || false,
+    rag_score: msg.rag_score || null,
+    mode:      msg.mode      || 'teaching',
+    subject:   msg.subject   || null
   });
 }
 
@@ -1951,7 +1956,19 @@ async function sendMessage(){
     reply = await callOpenAI(messages.slice(-10)); // send last 10 only - prevents old context confusion
     removeTyping(typId);
     hideRouteStatus();
-    const aiMsg = {role:'assistant',content:reply,model:'openai',reason:'Powered by Tavily + OpenAI'};
+    const replyContent = (typeof reply === 'object' && reply.content) ? reply.content : reply;
+    const replyMeta    = (typeof reply === 'object' && reply.meta)    ? reply.meta    : {};
+    const aiMsg = {
+      role:      'assistant',
+      content:   replyContent,
+      model:     'openai',
+      reason:    'Powered by Tavily + OpenAI',
+      emotion:   replyMeta.emotion   || window._lastEmotion || 'neutral',
+      rag_hit:   replyMeta.rag_hit   || false,
+      rag_score: replyMeta.rag_score || null,
+      mode:      replyMeta.mode      || 'teaching',
+      subject:   replyMeta.subject   || null
+    };
     messages.push(aiMsg);
     // Show detected emotion in label if available
     const emotionLabel = reply && window._lastEmotion && window._lastEmotion !== 'neutral'
@@ -1960,7 +1977,7 @@ async function sendMessage(){
     // Remove stream bubble if it exists (appendBubble will show the final formatted version)
     const streamBubbles = document.querySelectorAll('.stream-bubble');
     streamBubbles.forEach(b => b.remove());
-    appendBubble('assistant',reply,'openai', emotionLabel);
+    appendBubble('assistant', replyContent, 'openai', emotionLabel);
     saveMessages();
     saveMessageToSupabase(aiMsg);
     addXP(15);
@@ -2026,7 +2043,7 @@ async function callProxy(model, msgs){
   });
   if(!res.ok){ const e = await res.json().catch(()=>({})); throw new Error(e.error||'Server error'); }
   const data = await res.json();
-  return data.content || data.reply || '';
+  return { content: data.content || data.reply || '', meta: data.meta || {} };
 }
 
 // Create a streaming bubble in the chat
