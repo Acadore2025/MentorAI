@@ -669,6 +669,8 @@ kbd{
 // SUPABASE - AUTH & DATABASE
 // ===============================================================
 const SUPABASE_URL = 'https://odoxoyiyysuukgpdzhvt.supabase.co';
+// Generate a unique session ID for this browser session
+const SESSION_ID = 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9kb3hveWl5eXN1dWtncGR6aHZ0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNTY5NzksImV4cCI6MjA4NzkzMjk3OX0.sDcg4VmA8n2o0hiLbKJyeqMDcIy_R9EECbIc3ChOMRQ';
 // sb = our supabase client (avoid conflict with window.supabase from CDN)
 let sb;
@@ -897,17 +899,27 @@ async function saveProfileToSupabase(){
 async function saveMessageToSupabase(msg){
   if(!currentUser) return;
   await sb.from('chat_messages').insert({
-    user_id:   currentUser.id,
-    role:      msg.role,
-    content:   msg.content,
-    model:     msg.model     || null,
-    reason:    msg.reason    || null,
-    emotion:   msg.emotion   || 'neutral',
-    rag_hit:   msg.rag_hit   || false,
-    rag_score: msg.rag_score || null,
-    mode:      msg.mode      || 'teaching',
-    subject:   msg.subject   || null,
-    issue:     msg.issue     || null
+    user_id:           currentUser.id,
+    role:              msg.role,
+    content:           msg.content,
+    model:             msg.model              || null,
+    reason:            msg.reason             || null,
+    emotion:           msg.emotion            || 'neutral',
+    rag_hit:           msg.rag_hit            || false,
+    rag_score:         msg.rag_score          || null,
+    mode:              msg.mode               || 'teaching',
+    subject:           msg.subject            || null,
+    issue:             msg.issue              || null,
+    rating:            msg.rating             || 0,
+    session_id:        SESSION_ID,
+    response_time_ms:  msg.response_time_ms   || null,
+    model_used:        msg.model_used         || null,
+    web_search_used:   msg.web_search_used    || false,
+    rag_score_actual:  msg.rag_score_actual   || null,
+    tokens_prompt:     msg.tokens_prompt      || null,
+    tokens_completion: msg.tokens_completion  || null,
+    tokens_total:      msg.tokens_total       || null,
+    cost_usd:          msg.cost_usd           || null
   });
 }
 
@@ -1960,16 +1972,25 @@ async function sendMessage(){
     const replyContent = (typeof reply === 'object' && reply.content) ? reply.content : reply;
     const replyMeta    = (typeof reply === 'object' && reply.meta)    ? reply.meta    : {};
     const aiMsg = {
-      role:      'assistant',
-      content:   replyContent,
-      model:     'openai',
-      reason:    'Powered by Tavily + OpenAI',
-      emotion:   replyMeta.emotion   || window._lastEmotion || 'neutral',
-      rag_hit:   replyMeta.rag_hit   || false,
-      rag_score: replyMeta.rag_score || null,
-      mode:      replyMeta.mode      || 'teaching',
-      subject:   replyMeta.subject   || null,
-      issue:     replyMeta.issue     || null
+      role:              'assistant',
+      content:           replyContent,
+      model:             'openai',
+      reason:            'Powered by Tavily + OpenAI',
+      emotion:           replyMeta.emotion           || window._lastEmotion || 'neutral',
+      rag_hit:           replyMeta.rag_hit            || false,
+      rag_score:         replyMeta.rag_score          || null,
+      mode:              replyMeta.mode               || 'teaching',
+      subject:           replyMeta.subject            || null,
+      issue:             replyMeta.issue              || null,
+      rating:            0,
+      response_time_ms:  replyMeta.response_time_ms   || null,
+      model_used:        replyMeta.model_used         || 'gpt-4o',
+      web_search_used:   replyMeta.web_search_used    || false,
+      rag_score_actual:  replyMeta.rag_score_actual   || null,
+      tokens_prompt:     replyMeta.tokens_prompt      || null,
+      tokens_completion: replyMeta.tokens_completion  || null,
+      tokens_total:      replyMeta.tokens_total       || null,
+      cost_usd:          replyMeta.cost_usd           || null
     };
     messages.push(aiMsg);
     // Show detected emotion in label if available
