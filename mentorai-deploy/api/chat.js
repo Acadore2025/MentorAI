@@ -192,6 +192,16 @@ ${webContext}
     const smartModel = 'gpt-4o';
 
     const response = await callAI(smartModel, finalMessages, systemPrompt);
+
+    // Add metadata for prompt analysis report — saves to chat_messages table
+    response.meta = {
+      emotion:   emotionData.detected ? emotionData.emotion : student.emotion || 'neutral',
+      rag_hit:   !ragNoContent && !!ragContext,
+      rag_score: null,
+      mode:      intent.mode    || 'teaching',
+      subject:   intent.subject || null
+    };
+
     return res.status(200).json(response);
 
   } catch (err) {
