@@ -1321,13 +1321,38 @@ function selectBestModel(message, intent, emotionData, webContext, premiumAllowe
 // MODEL CALLERS
 // ─────────────────────────────────────────────────────────────
 async function callAI(model, messages, system) {
-  if (model === 'claude-sonnet-4-6')          return callClaude(messages, system, 'claude-sonnet-4-6');
-  if (model === 'claude-3-5-haiku-20241022')   return callClaude(messages, system, 'claude-3-5-haiku-20241022');
-  if (model === 'gemini-1.5-flash')            return callGemini(messages, system);
-  if (model === 'llama-3.3-70b-versatile')     return callGroq(messages, system, 'llama-3.3-70b-versatile');
-  if (model === 'deepseek-chat')               return callDeepSeek(messages, system);
-  if (model === 'gpt-4o-mini')                 return callOpenAI(messages, system, 'gpt-4o-mini');
-  return callOpenAI(messages, system, 'gpt-4o');
+  // Fallback chain — if primary model fails, try next best, then gpt-4o-mini as final safety net
+  const fallbackChain = {
+    'claude-sonnet-4-6':         ['llama-3.3-70b-versatile', 'gpt-4o-mini'],
+    'claude-3-5-haiku-20241022': ['llama-3.3-70b-versatile', 'gpt-4o-mini'],
+    'gpt-4o':                    ['llama-3.3-70b-versatile', 'gpt-4o-mini'],
+    'gemini-1.5-flash':          ['llama-3.3-70b-versatile', 'gpt-4o-mini'],
+    'deepseek-chat':             ['llama-3.3-70b-versatile', 'gpt-4o-mini'],
+    'llama-3.3-70b-versatile':   ['gpt-4o-mini'],
+    'gpt-4o-mini':               []
+  };
+
+  const modelsToTry = [model, ...(fallbackChain[model] || ['gpt-4o-mini'])];
+
+  for (const m of modelsToTry) {
+    try {
+      console.log(`[MODEL] Trying: ${m}`);
+      if (m === 'claude-sonnet-4-6')          return await callClaude(messages, system, 'claude-sonnet-4-6');
+      if (m === 'claude-3-5-haiku-20241022')   return await callClaude(messages, system, 'claude-3-5-haiku-20241022');
+      if (m === 'gemini-1.5-flash')            return await callGemini(messages, system);
+      if (m === 'llama-3.3-70b-versatile')     return await callGroq(messages, system, 'llama-3.3-70b-versatile');
+      if (m === 'deepseek-chat')               return await callDeepSeek(messages, system);
+      if (m === 'gpt-4o-mini')                 return await callOpenAI(messages, system, 'gpt-4o-mini');
+      return await callOpenAI(messages, system, 'gpt-4o');
+    } catch (err) {
+      console.warn(`[MODEL] ${m} failed: ${err.message} — trying next fallback`);
+      if (m === modelsToTry[modelsToTry.length - 1]) {
+        // All fallbacks exhausted — throw final error
+        throw new Error(`All models failed. Last error: ${err.message}`);
+      }
+      // Continue to next model in chain
+    }
+  }
 }
 
 async function callOpenAI(messages, system, modelName = 'gpt-4o') {
