@@ -270,41 +270,32 @@ ${webContext}
     };
 
     // ── Proactive Mentor System ──────────────────────────────
-    // Detect if user has confirmed a goal/schedule and trigger emails
-    try {
-      const proactiveTrigger = detectProactiveTrigger(userMessage, messages, response.meta);
-      if (proactiveTrigger && userId && userEmail) {
-        // Fire and forget — don't block the response
-        triggerProactiveMentor({
-          userId,
-          userEmail,
-          userName:      student.name,
-          learningStyle: student.learning_style,
-          personality:   student.personality,
-          trigger:       proactiveTrigger,
-          supabaseUrl:   process.env.SUPABASE_URL,
-          supabaseKey:   process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY,
-          baseUrl:       process.env.VERCEL_URL
-            ? `https://${process.env.VERCEL_URL}`
-            : 'https://mentor-ai-swart.vercel.app'
-        }).catch(e => console.warn('[PROACTIVE] Non-critical error:', e.message));
-
-        // Tell frontend to show email confirmation UI if needed
-        if (proactiveTrigger.needsEmailConfirm) {
-          response.meta.proactive_action  = 'ask_email_confirm';
-          response.meta.proactive_goal    = proactiveTrigger.goal;
-          response.meta.proactive_topic   = proactiveTrigger.topic;
-          response.meta.proactive_days    = proactiveTrigger.timeline_days;
-        } else {
-          response.meta.proactive_action  = 'schedule_created';
-          response.meta.proactive_goal    = proactiveTrigger.goal;
-        }
-      }
-    } catch(proactiveErr) {
-      console.warn('[PROACTIVE] Skipped:', proactiveErr.message);
+    // Detect trigger SYNCHRONOUSLY (fast — no API calls)
+    // Then return response immediately and trigger email in background
+    const proactiveTrigger = detectProactiveTrigger(userMessage, messages, response.meta);
+    if (proactiveTrigger && userId && userEmail) {
+      response.meta.proactive_action = 'schedule_created';
+      response.meta.proactive_goal   = proactiveTrigger.goal;
+      response.meta.proactive_topic  = proactiveTrigger.topic;
     }
 
-    return res.status(200).json(response);
+    // Return response to user IMMEDIATELY — no waiting
+    res.status(200).json(response);
+
+    // AFTER response sent — trigger emails in background (non-blocking)
+    if (proactiveTrigger && userId && userEmail) {
+      triggerProactiveMentor({
+        userId,
+        userEmail,
+        userName:      student.name,
+        learningStyle: student.learning_style,
+        personality:   student.personality,
+        trigger:       proactiveTrigger,
+        supabaseUrl:   process.env.SUPABASE_URL,
+        supabaseKey:   process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY,
+        baseUrl:       'https://mentor-ai-swart.vercel.app'
+      }).catch(e => console.warn('[PROACTIVE] Background error:', e.message));
+    }
 
   } catch (err) {
     console.error('Chat error:', err);
