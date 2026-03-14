@@ -524,17 +524,17 @@ kbd{
     <!-- SIGNUP ONLY FIELDS -->
     <div id="signup-fields">
       <div class="auth-field">
-        <label>Your Name</label>
-        <input type="text" id="auth-name" placeholder="What should we call you?" />
+        <label>Your Name <span style="color:var(--danger)">*</span></label>
+        <input type="text" id="auth-name" placeholder="What should we call you?" required autocomplete="name" />
       </div>
       <div class="auth-row">
         <div class="auth-field">
-          <label>Age</label>
-          <input type="number" id="auth-age" placeholder="e.g. 24" min="13" max="80" />
+          <label>Age <span style="color:var(--danger)">*</span></label>
+          <input type="number" id="auth-age" placeholder="e.g. 24" min="13" max="80" required />
         </div>
         <div class="auth-field">
-          <label>Gender</label>
-          <select id="auth-gender">
+          <label>Gender <span style="color:var(--danger)">*</span></label>
+          <select id="auth-gender" required>
             <option value="" disabled selected>Select</option>
             <option value="Male">Male</option>
             <option value="Female">Female</option>
@@ -547,12 +547,12 @@ kbd{
 
     <!-- COMMON FIELDS -->
     <div class="auth-field">
-      <label>Email Address</label>
-      <input type="email" id="auth-email" placeholder="you@example.com" />
+      <label>Email Address <span style="color:var(--danger)">*</span></label>
+      <input type="email" id="auth-email" placeholder="you@example.com" required autocomplete="email" />
     </div>
     <div class="auth-field">
-      <label>Password</label>
-      <input type="password" id="auth-password" placeholder="Min 6 characters" onkeydown="if(event.key==='Enter')handleAuth()" />
+      <label>Password <span style="color:var(--danger)">*</span></label>
+      <input type="password" id="auth-password" placeholder="Min 6 characters" required autocomplete="new-password" onkeydown="if(event.key==='Enter')handleAuth()" />
     </div>
 
     <button class="btn-primary" id="auth-btn" onclick="handleAuth()" style="width:100%;margin-top:4px">Sign In -></button>
@@ -775,6 +775,14 @@ try {
 }
 
 // -- AUTH TAB SWITCH ------------------------------------------
+// Highlight invalid field
+function highlightField(id){
+  const el = document.getElementById(id);
+  if(!el) return;
+  el.style.borderColor = 'var(--danger)';
+  el.addEventListener('input', ()=>{ el.style.borderColor = ''; }, { once: true });
+}
+
 function switchTab(mode){
   const isLogin = mode === 'login';
   document.getElementById('tab-login').classList.toggle('active', isLogin);
@@ -800,7 +808,8 @@ async function handleAuth(){
   const email = document.getElementById('auth-email').value.trim();
   const password = document.getElementById('auth-password').value.trim();
 
-  if(!email || !password){ showAuthMsg('Please fill in all fields.', 'err'); return; }
+  if(!email || !password){ showAuthMsg('Please fill in all required fields.', 'err'); return; }
+  if(!email.includes('@') || !email.includes('.')){ showAuthMsg('Please enter a valid email address.', 'err'); return; }
   if(password.length < 6){ showAuthMsg('Password must be at least 6 characters.', 'err'); return; }
 
   btn.textContent = isLogin ? 'Signing in...' : 'Creating account...';
@@ -819,9 +828,32 @@ async function handleAuth(){
       const name = document.getElementById('auth-name').value.trim();
       const age = document.getElementById('auth-age').value.trim();
       const gender = document.getElementById('auth-gender').value;
-      if(!name){ showAuthMsg('Please enter your name.', 'err'); btn.disabled=false; btn.textContent='Create Account ->'; return; }
-      if(!age){ showAuthMsg('Please enter your age.', 'err'); btn.disabled=false; btn.textContent='Create Account ->'; return; }
-      if(!gender){ showAuthMsg('Please select your gender.', 'err'); btn.disabled=false; btn.textContent='Create Account ->'; return; }
+      // All fields mandatory
+      if(!name){
+        showAuthMsg('Please enter your name.', 'err');
+        highlightField('auth-name'); document.getElementById('auth-name').focus();
+        btn.disabled=false; btn.textContent='Create Account ->'; return;
+      }
+      if(name.length < 2){
+        showAuthMsg('Name must be at least 2 characters.', 'err');
+        highlightField('auth-name'); document.getElementById('auth-name').focus();
+        btn.disabled=false; btn.textContent='Create Account ->'; return;
+      }
+      if(!age){
+        showAuthMsg('Please enter your age.', 'err');
+        highlightField('auth-age'); document.getElementById('auth-age').focus();
+        btn.disabled=false; btn.textContent='Create Account ->'; return;
+      }
+      if(parseInt(age) < 13 || parseInt(age) > 80){
+        showAuthMsg('Please enter a valid age (13-80).', 'err');
+        highlightField('auth-age'); document.getElementById('auth-age').focus();
+        btn.disabled=false; btn.textContent='Create Account ->'; return;
+      }
+      if(!gender){
+        showAuthMsg('Please select your gender.', 'err');
+        highlightField('auth-gender'); document.getElementById('auth-gender').focus();
+        btn.disabled=false; btn.textContent='Create Account ->'; return;
+      }
 
       const { data, error } = await sb.auth.signUp({ email, password });
       if(error) throw error;
@@ -860,7 +892,26 @@ async function handleAuth(){
       return;
     }
   } catch(err) {
-    showAuthMsg(err.message || 'Something went wrong. Try again.', 'err');
+    const msg = (err.message || '').toLowerCase();
+    let friendlyAuth = 'Something went wrong. Please try again.';
+    if(msg.includes('invalid login') || msg.includes('invalid credentials') || msg.includes('wrong password')){
+      friendlyAuth = 'Incorrect email or password. Please try again.';
+    } else if(msg.includes('email not confirmed')){
+      friendlyAuth = 'Please verify your email first. Check your inbox!';
+    } else if(msg.includes('user already registered') || msg.includes('already exists')){
+      friendlyAuth = 'An account with this email already exists. Try signing in instead.';
+    } else if(msg.includes('password') && msg.includes('least')){
+      friendlyAuth = 'Password must be at least 6 characters long.';
+    } else if(msg.includes('invalid email') || msg.includes('valid email')){
+      friendlyAuth = 'Please enter a valid email address.';
+    } else if(msg.includes('network') || msg.includes('fetch')){
+      friendlyAuth = 'Connection issue. Check your internet and try again.';
+    } else if(msg.includes('too many')){
+      friendlyAuth = 'Too many attempts. Please wait a moment and try again.';
+    } else if(err.message) {
+      friendlyAuth = err.message;
+    }
+    showAuthMsg(friendlyAuth, 'err');
     btn.disabled = false;
     btn.textContent = isLogin ? 'Sign In ->' : 'Create Account ->';
     return;
@@ -1782,8 +1833,12 @@ async function saveKeysAndStart(){
       xp: 0, level: 1, streak: 1,
       last_visit: new Date().toDateString()
     });
-    if(error) console.error('Profile save error:', error);
-    else console.log(' Full profile saved to Supabase');
+    if(error) {
+      console.error('Profile save error:', error);
+      // Non-critical — don't block launch
+    } else {
+      console.log('Full profile saved to Supabase');
+    }
   }
   launchApp();
 }
@@ -2493,7 +2548,25 @@ async function sendMessage(){
     triggerLogIfNeeded();
   }catch(err){
     hideRouteStatus();
-    showError('Error: '+err.message);
+    removeTyping(typId);
+    // Friendly error messages based on error type
+    const msg = (err.message || '').toLowerCase();
+    let friendlyMsg = '';
+    if(msg.includes('credit') || msg.includes('billing') || msg.includes('quota') || msg.includes('rate limit')){
+      friendlyMsg = "I'm temporarily at capacity. Give me a moment and try again! 🔄";
+    } else if(msg.includes('network') || msg.includes('fetch') || msg.includes('failed to fetch')){
+      friendlyMsg = "Looks like a connection hiccup. Check your internet and try again. 📶";
+    } else if(msg.includes('timeout') || msg.includes('timed out')){
+      friendlyMsg = "That took too long — my bad! Try asking again and I'll be faster. ⏱️";
+    } else if(msg.includes('all models failed')){
+      friendlyMsg = "All my AI engines are resting right now. Try again in a minute! 🔧";
+    } else if(msg.includes('api key') || msg.includes('unauthorized') || msg.includes('401')){
+      friendlyMsg = "Having a technical moment. Our team has been notified. Try again shortly! 🛠️";
+    } else {
+      friendlyMsg = "Something went wrong on my end. Try sending your message again! 🙏";
+    }
+    showFriendlyError(friendlyMsg);
+    console.error('[CHAT ERROR]', err.message);
   }
   setLoading(false);
 }
@@ -2755,7 +2828,46 @@ function showTyping(){
 function removeTyping(id){const e=document.getElementById(id);if(e)e.remove();}
 function showRouteStatus(msg){document.getElementById('route-msg').textContent=msg;document.getElementById('route-status').classList.add('on');}
 function hideRouteStatus(){setTimeout(()=>document.getElementById('route-status').classList.remove('on'),1500);}
-function showError(msg){const wrap=document.getElementById('messages');const e=document.createElement('div');e.className='error-msg';e.textContent=msg;wrap.appendChild(e);scrollDown();}
+function showError(msg){
+  // Keep for backwards compatibility — routes to friendly version
+  const friendly = msg.replace(/^Error:\s*/i,'');
+  showFriendlyError(friendly);
+}
+
+function showFriendlyError(msg){
+  const wrap = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'message ai';
+  div.style.animation = 'fadeUp 0.3s ease both';
+  div.innerHTML = `
+    <div class="msg-avatar ai-av" style="font-size:16px">⚠️</div>
+    <div class="msg-wrap">
+      <div class="bubble" style="background:rgba(224,112,112,0.07);border-color:rgba(224,112,112,0.2);color:var(--text)">
+        <p style="margin:0">${msg}</p>
+      </div>
+      <div style="margin-top:6px">
+        <button onclick="retryLastMessage()" style="font-size:11px;padding:4px 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--muted);cursor:pointer;font-family:'Outfit',sans-serif;transition:all 0.2s" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">
+          🔄 Try again
+        </button>
+      </div>
+    </div>`;
+  wrap.appendChild(div);
+  scrollDown();
+}
+
+// Retry last user message
+function retryLastMessage(){
+  const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+  if(!lastUserMsg) return;
+  // Remove the error bubble
+  const wrap = document.getElementById('messages');
+  const lastChild = wrap.lastElementChild;
+  if(lastChild) lastChild.remove();
+  // Remove from messages array and resend
+  messages = messages.filter(m => !(m.role === 'user' && m.content === lastUserMsg.content && messages.indexOf(m) === messages.lastIndexOf(m)));
+  document.getElementById('user-input').value = lastUserMsg.content;
+  sendMessage();
+}
 function setLoading(v){
   isLoading=v;
   const btn = document.getElementById('send-btn');
