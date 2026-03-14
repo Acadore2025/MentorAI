@@ -940,7 +940,17 @@ async function loadUserProfile(){
     profile.role = data.role || '';
     profile.goal = data.goal || '';
     profile.timeline = data.timeline || '';
-    profile.learnStyle      = data.learn_style       || '';
+    // Normalize learn_style — Supabase may store full text, code needs short key
+    const rawStyle = data.learn_style || '';
+    const styleMap = {
+      'visual': 'visual', 'diagram': 'visual', 'chart': 'visual', 'image': 'visual',
+      'hands_on': 'hands_on', 'hands-on': 'hands_on', 'doing': 'hands_on',
+      'project': 'hands_on', 'building': 'hands_on', 'practical': 'hands_on',
+      'story': 'story', 'narrative': 'story', 'example': 'story', 'real': 'story',
+      'logical': 'logical', 'analytical': 'logical', 'logical': 'logical', 'data': 'logical'
+    };
+    const normalizedStyle = Object.keys(styleMap).find(k => rawStyle.toLowerCase().includes(k));
+    profile.learnStyle = normalizedStyle ? styleMap[normalizedStyle] : (rawStyle || 'visual');
     profile.personalityType = data.personality_type  || '';
     profile.personalityEmoji= data.personality_emoji || '';
     profile.personalityDesc = data.personality_desc  || '';
