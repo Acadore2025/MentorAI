@@ -91,7 +91,7 @@ function buildEmailHTML(data, dateLabel) {
     costToday, costThisMonth, avgResponseMs,
     fastestResponseMs, slowestResponseMs,
     webSearchCount, modelBreakdown,
-    avgRating, ratedMessages,
+    avgRating, ratedMessages, modelRatings,
     modelFailures, fallbackSuccessRate
   } = data;
 
@@ -317,6 +317,37 @@ function buildEmailHTML(data, dateLabel) {
       Student Ratings: <strong style="color:#e2e8f0">${ratedMessages || 0} rated</strong> &nbsp;|&nbsp;
       Avg Rating: <strong style="color:${avgRating >= 0.5 ? '#22c55e' : '#f59e0b'}">${avgRating !== null ? (avgRating > 0 ? '👍 Positive' : avgRating < 0 ? '👎 Negative' : 'Neutral') : 'No ratings yet'}</strong>
     </div>
+    ${modelRatings && modelRatings.length > 0 ? `
+    <div style="margin-top:14px">
+      <div style="font-size:12px;color:#64748b;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Rating by Model</div>
+      <table style="width:100%;border-collapse:collapse;font-size:14px">
+        <thead>
+          <tr style="border-bottom:1px solid #2d2d44">
+            <th style="padding:8px 12px;text-align:left;color:#64748b;font-weight:500">Model</th>
+            <th style="padding:8px 12px;text-align:center;color:#64748b;font-weight:500">👍</th>
+            <th style="padding:8px 12px;text-align:center;color:#64748b;font-weight:500">👎</th>
+            <th style="padding:8px 12px;text-align:center;color:#64748b;font-weight:500">Score</th>
+            <th style="padding:8px 12px;text-align:center;color:#64748b;font-weight:500">Verdict</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${modelRatings.map(m => `
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.04)">
+            <td style="padding:8px 12px;color:#e2e8f0;font-weight:500">${m.model}</td>
+            <td style="padding:8px 12px;text-align:center;color:#22c55e">${m.up}</td>
+            <td style="padding:8px 12px;text-align:center;color:#ef4444">${m.down}</td>
+            <td style="padding:8px 12px;text-align:center">
+              <div style="background:#0f0f1a;border-radius:20px;padding:3px 10px;display:inline-block;font-size:12px;font-weight:600;color:${m.score >= 80 ? '#22c55e' : m.score >= 60 ? '#f59e0b' : '#ef4444'}">
+                ${m.score}%
+              </div>
+            </td>
+            <td style="padding:8px 12px;text-align:center;font-size:13px">
+              ${m.score >= 85 ? '⭐ Excellent' : m.score >= 70 ? '✅ Good' : m.score >= 50 ? '⚠️ Average' : '❌ Poor'}
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : ''}
   </div>
 
   <!-- Section 9: Model Health & Failures -->
@@ -542,6 +573,32 @@ export default async function handler(req, res) {
       ? ratedMsgs.reduce((s, m) => s + (m.rating || 0), 0) / ratedMessages
       : null;
 
+    // ── Rating breakdown by model ─────────────────────────────
+    const MODEL_DISPLAY_NAMES = {
+      'gpt-4o':                    'GPT-4o',
+      'gpt-4o-mini':               'GPT-4o Mini',
+      'claude-sonnet-4-6':         'Claude Sonnet',
+      'claude-3-5-haiku-20241022': 'Claude Haiku',
+      'gemini-1.5-flash':          'Gemini Flash',
+      'llama-3.3-70b-versatile':   'Groq Llama 3.3',
+      'deepseek-chat':             'DeepSeek'
+    };
+    const ratingByModel = {};
+    ratedMsgs.forEach(m => {
+      const model = m.model_used || 'unknown';
+      if(!ratingByModel[model]) ratingByModel[model] = { up: 0, down: 0 };
+      if(m.rating > 0) ratingByModel[model].up++;
+      else if(m.rating < 0) ratingByModel[model].down++;
+    });
+    const modelRatings = Object.entries(ratingByModel)
+      .map(([model, r]) => {
+        const total = r.up + r.down;
+        const score = total > 0 ? Math.round((r.up / total) * 100) : 0;
+        return { model: MODEL_DISPLAY_NAMES[model] || model, up: r.up, down: r.down, score, total };
+      })
+      .filter(m => m.total > 0)
+      .sort((a, b) => b.score - a.score);
+
     // ── RAG metrics from real data ────────────────────────────
     const ragMessages    = assistantMessages.filter(m => m.rag_hit !== null);
     const realRagHitRate = ragMessages.length > 0
@@ -626,6 +683,7 @@ export default async function handler(req, res) {
       modelBreakdown,
       avgRating,
       ratedMessages,
+      modelRatings,
       modelFailures,
       fallbackSuccessRate: realFallbackRate
     };
