@@ -2488,6 +2488,7 @@ async function sendMessage(){
   setLoading(true);
 
   showRouteStatus('Thinking...');
+  let typId = null;
   try{
     // Detect emotion from message
     try {
@@ -2506,7 +2507,7 @@ async function sendMessage(){
       }
     } catch(e) { window._lastEmotion = 'neutral'; }
 
-    const typId = showTyping();
+    typId = showTyping();
     let reply;
     reply = await callOpenAI(messages.slice(-10)); // send last 10 only - prevents old context confusion
     removeTyping(typId);
@@ -3245,8 +3246,8 @@ function insertChip(text) {
 
   // Highlight active chip briefly
   document.querySelectorAll('.toolbar-chip').forEach(c => c.classList.remove('active'));
-  event.currentTarget.classList.add('active');
-  setTimeout(()=>event.currentTarget?.classList.remove('active'), 800);
+  if(event?.currentTarget) event.currentTarget.classList.add('active');
+  setTimeout(()=>{ if(event?.currentTarget) event.currentTarget.classList.remove('active'); }, 800);
 }
 
 // ── Clear input ───────────────────────────────────────────────
