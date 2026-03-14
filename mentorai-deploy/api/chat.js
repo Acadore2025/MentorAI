@@ -18,6 +18,8 @@ export default async function handler(req, res) {
     const studentProfile = body.profile  || {};
     const baseSystem     = body.system   || '';
     const model          = body.model    || 'openai';
+    const userId         = body.user_id  || null;
+    const userEmail      = body.user_email || studentProfile.email || null;
 
     const userMessage = messages[messages.length - 1]?.content || '';
 
@@ -266,6 +268,41 @@ ${webContext}
       tokens_total:      totalTokens      || null,
       cost_usd:          parseFloat(costUSD.toFixed(6)) || null
     };
+
+    // ── Proactive Mentor System ──────────────────────────────
+    // Detect if user has confirmed a goal/schedule and trigger emails
+    try {
+      const proactiveTrigger = detectProactiveTrigger(userMessage, messages, response.meta);
+      if (proactiveTrigger && userId && userEmail) {
+        // Fire and forget — don't block the response
+        triggerProactiveMentor({
+          userId,
+          userEmail,
+          userName:      student.name,
+          learningStyle: student.learning_style,
+          personality:   student.personality,
+          trigger:       proactiveTrigger,
+          supabaseUrl:   process.env.SUPABASE_URL,
+          supabaseKey:   process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY,
+          baseUrl:       process.env.VERCEL_URL
+            ? `https://${process.env.VERCEL_URL}`
+            : 'https://mentor-ai-swart.vercel.app'
+        }).catch(e => console.warn('[PROACTIVE] Non-critical error:', e.message));
+
+        // Tell frontend to show email confirmation UI if needed
+        if (proactiveTrigger.needsEmailConfirm) {
+          response.meta.proactive_action  = 'ask_email_confirm';
+          response.meta.proactive_goal    = proactiveTrigger.goal;
+          response.meta.proactive_topic   = proactiveTrigger.topic;
+          response.meta.proactive_days    = proactiveTrigger.timeline_days;
+        } else {
+          response.meta.proactive_action  = 'schedule_created';
+          response.meta.proactive_goal    = proactiveTrigger.goal;
+        }
+      }
+    } catch(proactiveErr) {
+      console.warn('[PROACTIVE] Skipped:', proactiveErr.message);
+    }
 
     return res.status(200).json(response);
 
@@ -1635,6 +1672,158 @@ function detectPsychInsight(message, history, emotionData) {
   }
 
   return { insight: null, key: null };
+}
+
+// ─────────────────────────────────────────────────────────────
+// PROACTIVE MENTOR SYSTEM
+// Detects goal confirmation and triggers personalised email sequences
+// ─────────────────────────────────────────────────────────────
+
+function detectProactiveTrigger(message, history, meta) {
+  const msg = message.toLowerCase();
+  const recentHistory = history.slice(-6).map(m => (m.content||'').toLowerCase()).join(' ');
+  const combined = msg + ' ' + recentHistory;
+
+  // Goal/exam confirmation signals
+  const goalSignals = [
+    { pattern: /gmat.{0,20}(\d+)\s*month/i,       topic: 'GMAT',          extractDays: m => parseInt(m[1]) * 30 },
+    { pattern: /cat.{0,20}(\d+)\s*month/i,         topic: 'CAT',           extractDays: m => parseInt(m[1]) * 30 },
+    { pattern: /upsc.{0,20}(\d+)\s*month/i,        topic: 'UPSC',          extractDays: m => parseInt(m[1]) * 30 },
+    { pattern: /jee.{0,20}(\d+)\s*month/i,         topic: 'JEE',           extractDays: m => parseInt(m[1]) * 30 },
+    { pattern: /neet.{0,20}(\d+)\s*month/i,        topic: 'NEET',          extractDays: m => parseInt(m[1]) * 30 },
+    { pattern: /interview.{0,20}(\d+)\s*day/i,     topic: 'Interview Prep',extractDays: m => parseInt(m[1]) },
+    { pattern: /interview.{0,10}tomorrow/i,        topic: 'Interview Prep',extractDays: () => 1 },
+    { pattern: /interview.{0,10}(2|two)\s*day/i,   topic: 'Interview Prep',extractDays: () => 2 },
+    { pattern: /ai engineer.{0,20}(\d+)\s*month/i, topic: 'AI Engineering',extractDays: m => parseInt(m[1]) * 30 },
+    { pattern: /product manager.{0,20}(\d+)\s*month/i, topic: 'Product Management', extractDays: m => parseInt(m[1]) * 30 },
+    { pattern: /learn.{0,20}python.{0,20}(\d+)\s*month/i, topic: 'Python', extractDays: m => parseInt(m[1]) * 30 },
+    { pattern: /startup.{0,20}(\d+)\s*month/i,    topic: 'Entrepreneurship', extractDays: m => parseInt(m[1]) * 30 },
+  ];
+
+  // Check if user just confirmed a plan ("yes", "that works", "let's start", etc.)
+  const confirmationSignals = [
+    'yes', 'yeah', 'sure', 'ok', 'okay', 'let's start', 'that works',
+    'sounds good', 'ready', 'let's do it', 'start from tomorrow',
+    'are we ready', 'confirmed', 'i'm in', 'great let's go'
+  ];
+  const isConfirmation = confirmationSignals.some(s => msg.includes(s));
+
+  // Look for goal in recent history if this is a confirmation
+  if (isConfirmation) {
+    for (const signal of goalSignals) {
+      const match = combined.match(signal.pattern);
+      if (match) {
+        return {
+          goal:          `Prepare for ${signal.topic}`,
+          topic:         signal.topic,
+          timeline_days: signal.extractDays(match),
+          needsEmailConfirm: true
+        };
+      }
+    }
+  }
+
+  // Direct goal statement with timeline
+  for (const signal of goalSignals) {
+    const match = msg.match(signal.pattern);
+    if (match) {
+      return {
+        goal:          `Prepare for ${signal.topic}`,
+        topic:         signal.topic,
+        timeline_days: signal.extractDays(match),
+        needsEmailConfirm: true
+      };
+    }
+  }
+
+  return null;
+}
+
+// Create schedule in Supabase and send Day 1 email
+async function triggerProactiveMentor({ userId, userEmail, userName, learningStyle, personality, trigger, supabaseUrl, supabaseKey, baseUrl }) {
+  if (!userId || !userEmail || !trigger) return;
+
+  // Check if schedule already exists for this goal
+  const existingRes = await fetch(
+    `${supabaseUrl}/rest/v1/mentor_schedules?user_id=eq.${userId}&topic=eq.${encodeURIComponent(trigger.topic)}&status=eq.active&select=id`,
+    { headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` } }
+  );
+  const existing = await existingRes.json().catch(() => []);
+  if (existing && existing.length > 0) {
+    console.log('[PROACTIVE] Schedule already exists for', trigger.topic);
+    return;
+  }
+
+  // Create schedule in Supabase
+  const scheduleRes = await fetch(`${supabaseUrl}/rest/v1/mentor_schedules`, {
+    method: 'POST',
+    headers: {
+      'apikey':        supabaseKey,
+      'Authorization': `Bearer ${supabaseKey}`,
+      'Content-Type':  'application/json',
+      'Prefer':        'return=representation'
+    },
+    body: JSON.stringify({
+      user_id:        userId,
+      goal:           trigger.goal,
+      topic:          trigger.topic,
+      timeline_days:  trigger.timeline_days,
+      current_day:    1,
+      email:          userEmail,
+      user_name:      userName,
+      learning_style: learningStyle,
+      personality:    personality,
+      status:         'active',
+      roadmap:        { completed_topics: [] },
+      last_email_sent: new Date().toISOString()
+    })
+  });
+  const schedule = await scheduleRes.json();
+  const scheduleId = Array.isArray(schedule) ? schedule[0]?.id : schedule?.id;
+
+  console.log('[PROACTIVE] Schedule created:', scheduleId, 'for', trigger.topic);
+
+  // Send roadmap email immediately
+  await fetch(`${baseUrl}/api/mentor-email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'roadmap',
+      schedule_id: scheduleId,
+      context: {
+        name:          userName,
+        email:         userEmail,
+        goal:          trigger.goal,
+        topic:         trigger.topic,
+        timeline_days: trigger.timeline_days,
+        learning_style: learningStyle,
+        personality:   personality,
+        current_level: 'as discussed'
+      }
+    })
+  });
+
+  // If interview/exam is very soon (≤2 days), also send glossary immediately
+  if (trigger.timeline_days <= 2) {
+    await fetch(`${baseUrl}/api/mentor-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'glossary',
+        context: {
+          name:         userName,
+          email:        userEmail,
+          goal:         trigger.goal,
+          topic:        trigger.topic,
+          days_until:   trigger.timeline_days,
+          learning_style: learningStyle
+        }
+      })
+    });
+    console.log('[PROACTIVE] Sent urgent glossary for', trigger.topic);
+  }
+
+  console.log('[PROACTIVE] ✅ Full proactive sequence triggered for', userName);
 }
 
 async function callGemini(messages, system) {
