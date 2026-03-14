@@ -320,14 +320,18 @@ function extractStudentContext(profile) {
 
   return {
     name:              profile.name             || 'Student',
-    learning_style:    profile.learn_style      || profile.learning_style || personalityToStyle[profile.personality_type] || 'visual',
+    learning_style:    profile.learning_style   || profile.learn_style || personalityToStyle[profile.personality_type] || 'visual',
     personality:       profile.personality_type || 'The Grower',
+    personality_desc:  profile.personality_desc || '',
+    persona:           profile.persona          || 'friend',
     mbti_type:         profile.mbti_type        || null,
     primary_interest:  profile.primary_interest || null,
     eq_strength:       profile.eq_strength      || null,
     motivators:        profile.motivators       || [],
-    level:             profile.academic_level   || 'Class 11',
-    exam_target:       profile.exam_target      || 'CBSE',
+    traits:            profile.traits           || {},
+    level:             profile.academic_level   || 'Student',
+    exam_target:       profile.exam_target      || profile.goal || 'their goal',
+    timeline:          profile.timeline         || null,
     emotion:           profile.current_emotion  || 'neutral',
     weak_subjects:     profile.weak_subjects    || [],
     strong_subjects:   profile.strong_subjects  || [],
@@ -398,6 +402,7 @@ function detectIntent(message, student = {}, history = []) {
       'latest','recent','current','now','right now',
       '2024','2025','2026',
       'news','happened','update','announced','launched',
+      // NOTE: Do NOT add generic time words here — they cause false positives
       'who is','who won','who became','who got',
       'exam date','notification','result','cutoff','vacancy','recruitment',
       'admit card','syllabus 2025','new pattern',
@@ -433,6 +438,20 @@ function detectIntent(message, student = {}, history = []) {
   const isAnswerAttempt = prevWasPractice && !signals.wantsExplanation && msg.length < 100;
 
   // SCENARIO 5: Pure conversation (greeting, thanks, general chat)
+  // Override web search if user is clearly in study/exam context
+  // Prevents "I prepared 7 years ago" from triggering news search
+  const isStudyContext = signals.wantsPractice || signals.wantsFlashcards ||
+    signals.wantsExplanation || signals.wantsSummary || signals.wantsStudyPlan ||
+    (subject !== null);
+  if (isStudyContext && signals.needsWebSearch) {
+    // Only keep web search if message has clear current-events signal
+    const hasCurrentEventsSignal = ['news','today','latest','current','2025','2026',
+      'announced','launched','just released','this week'].some(k => msg.includes(k));
+    if (!hasCurrentEventsSignal) {
+      signals.needsWebSearch = false;
+    }
+  }
+
   const isPureConversation = !subject && !signals.wantsExplanation && !signals.wantsPractice &&
     !signals.wantsFlashcards && !signals.needsWebSearch && !signals.needsSupport &&
     ['hi','hello','hey','thanks','thank you','ok','okay','great','nice','cool','bye'].some(k => msg.includes(k));
@@ -1006,11 +1025,43 @@ Format each card as:
 [OK] A: [answer]
 Give 5 flashcards. After all 5 ask: "Want 5 more or shall we practice with questions?"`,
 
-    practice: `DELIVERY: Practice mode.
-1. Give ONE practice problem at their level
-2. Let them attempt (end with "Try it - what do you get?")
-3. After they respond, walk through full solution step by step
-4. End with one slightly harder follow-up`,
+    practice: `DELIVERY: Practice / Quiz mode — STRICT RULES.
+
+CRITICAL — ONE QUESTION AT A TIME. NEVER dump multiple questions.
+
+STEP 1 — DIAGNOSE FIRST (if no number/section specified yet):
+Ask EXACTLY these 2 things in one message:
+- "How many questions do you want?"
+- "Which section/topic should we focus on?" (give 2-3 options based on their subject)
+Do NOT give any questions yet.
+
+STEP 2 — ONCE they specify (number + topic):
+- Give question 1 of N ONLY
+- Format: "Question 1 of [N] — [Topic]
+[Question]
+
+What's your answer?"
+- STOP. Wait for their response.
+
+STEP 3 — AFTER they answer:
+- Immediately tell them: ✅ Correct! or ❌ Not quite.
+- Give a brief explanation matched to their learning style:
+  * Visual learner → describe it as a picture or diagram
+  * Story learner → connect it to a real-world story or example
+  * Logical learner → show the formula/derivation step by step
+  * Hands-on → show how you'd solve it physically
+- Then give question 2 of N. Wait again.
+
+STEP 4 — After ALL questions done:
+- Give score: "You got X out of N correct"
+- Identify the ONE area to focus on
+- Ask: "Want to go again on the weak area?"
+
+ABSOLUTE RULES:
+- NEVER give more than 1 question at a time
+- NEVER reveal answers before they respond
+- ALWAYS wait for their answer before proceeding
+- Match explanation style to ${student.learning_style} learning style`,
 
     teaching: `DELIVERY: Teaching mode.
 1. HOOK (1-2 sentences in their learning style - grab attention)
@@ -1056,10 +1107,11 @@ Use a clear table or parallel structure:
 End with a memory trick to never confuse them again.`,
 
     check_answer: `DELIVERY: Answer check mode.
-1. Confirm if their answer is correct or not - directly
-2. If wrong: show exactly where they went wrong (not just the right answer)
-3. Walk through the correct method step by step
-4. Give one more similar problem to solidify`,
+1. Confirm if their answer is correct or not - IMMEDIATELY and DIRECTLY (✅ or ❌)
+2. Give brief explanation in their learning style (2-3 lines max)
+3. If in a quiz sequence: give the NEXT question automatically
+4. If wrong: show exactly where they went wrong (not just the right answer)
+5. Keep momentum — do not over-explain between questions`,
 
     conversation: `DELIVERY: Conversational mode.
 Respond naturally and warmly. No teaching structure needed.
@@ -1109,15 +1161,24 @@ That is an interrogation. Not mentoring.`
 STUDENT PROFILE - READ THIS FIRST
 ========================================
 Name: ${student.name}
-Learning Style: ${student.learning_style.toUpperCase()} <- MOST IMPORTANT
-Personality Type: ${student.personality}${student.mbti_type ? ` (${student.mbti_type})` : ''}
+Persona Selected: ${student.persona || 'friend'} <- SPEAK IN THIS PERSONA'S VOICE
+Personality Type: ${student.personality}${student.mbti_type ? ` (MBTI: ${student.mbti_type})` : ''}
+Personality Description: ${student.personality_desc || 'A motivated learner ready to grow'}
+Learning Style: ${student.learning_style.toUpperCase()} <- MOST IMPORTANT — ALWAYS USE THIS
 Primary Interest: ${student.primary_interest || 'Not yet mapped'}
 EQ Strength: ${student.eq_strength || 'Developing'}
 Key Motivators: ${student.motivators && student.motivators.length > 0 ? student.motivators.join(', ') : 'Not yet mapped'}
 Level: ${student.level}
-Target Exam: ${student.exam_target}
+Goal: ${student.exam_target}
+Timeline: ${student.timeline || 'Not specified'}
 Emotion Right Now: ${student.emotion}
-Weak Areas: ${student.weak_subjects.join(', ') || 'None specified'}${student.memory ? `
+Weak Areas: ${student.weak_subjects.join(', ') || 'None specified'}
+Strong Areas: ${student.strong_subjects.join(', ') || 'None specified'}
+
+PERSONALISATION INSTRUCTION:
+Speak to ${student.name} as ${student.personality} with ${student.learning_style} learning style.
+They chose ${student.persona} as their mentor style — match that voice exactly.
+Every response must feel tailored to THIS person, not generic advice anyone could Google.${student.memory ? `
 
 ========================================
 LONG-TERM MEMORY - WHAT YOU KNOW ABOUT THIS STUDENT
