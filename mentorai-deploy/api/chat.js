@@ -30,6 +30,26 @@ export default async function handler(req, res) {
     // Step 2: Agent routes the message intelligently
     const intent = detectIntent(userMessage, student, messages);
 
+    // Step 2c: Pre-AI Clarification Engine
+    // Intercepts vague messages BEFORE calling AI
+    // Returns direct question without calling GPT-4o at all
+    const clarification = getClarification(userMessage, intent, messages, student);
+    if (clarification) {
+      return res.status(200).json({
+        content: clarification,
+        model:   'mentor-ai',
+        meta: {
+          emotion:   'neutral',
+          rag_hit:   false,
+          mode:      intent.mode,
+          subject:   intent.subject || null,
+          model_used: 'gpt-4o-mini',
+          is_premium: false,
+          routing_reason: 'Clarification — no AI call needed'
+        }
+      });
+    }
+
     // Step 2b: Auto-detect emotion from message
     const emotionData = detectEmotionFromMessage(userMessage, messages.slice(-4));
     if (emotionData.detected) {
@@ -372,6 +392,77 @@ function extractStudentContext(profile) {
 // Analyses full context - decides which tools to run + order
 // Much smarter than keyword matching
 // -------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────
+// PRE-AI CLARIFICATION ENGINE
+// Runs BEFORE GPT-4o — returns direct question if info missing
+// GPT-4o cannot override this — it never gets called
+// ─────────────────────────────────────────────────────────────
+function getClarification(message, intent, history, student) {
+  const msg = message.toLowerCase().trim();
+  const recentHistory = history.slice(-6).map(m => (m.content||'').toLowerCase()).join(' ');
+  const combined = msg + ' ' + recentHistory;
+  const name = student.name || 'there';
+
+  // ── Already in conversation — don't keep asking ──────────
+  // If we've exchanged 3+ messages on same topic, stop clarifying
+  const userMessages = history.filter(m => m.role === 'user');
+  if (userMessages.length > 4) return null;
+
+  // ── Subject doubt — vague, no specific topic ─────────────
+  const subjectDoubt = intent.needsKnowledge &&
+    intent.mode === 'teaching' &&
+    !intent.subject &&
+    (msg.includes('doubt') || msg.includes('confused') ||
+     msg.includes("don't understand") || msg.includes('dont understand') ||
+     msg.includes('help me understand') || msg.includes('explain'));
+
+  if (subjectDoubt) {
+    return `Which topic specifically, ${name}? And what's the exact part that's confusing — the concept itself or applying it to problems?`;
+  }
+
+  // ── GMAT / CAT / exam prep — missing level and hours ────
+  const examPrep = /gmat|cat|upsc|jee|neet|gate|clat/i.test(msg);
+  const hasTimeline = /\d+\s*(month|week|day)/i.test(combined);
+  const hasLevel = /beginner|fresh|never|first time|gave before|appeared|7 year|years ago|previous|score was/i.test(combined);
+  const hasHours = /\d+\s*(hour|hr)|hour a day|per day/i.test(combined);
+
+  if (examPrep && hasTimeline && !hasLevel) {
+    return `Got it, ${name}. Quick question before I build your plan — are you starting completely fresh, or have you studied for this before? And what score are you targeting?`;
+  }
+
+  // ── Interview prep — missing company and timeline ────────
+  const interviewPrep = /interview/i.test(msg) && intent.mode !== 'conversation';
+  const hasCompany = /google|amazon|microsoft|flipkart|tcs|infosys|wipro|meta|startup|mnc|accenture|deloitte|company/i.test(combined);
+  const hasInterviewTimeline = /tomorrow|today|\d+\s*day|\d+\s*week/i.test(combined);
+
+  if (interviewPrep && !hasCompany && !hasInterviewTimeline) {
+    return `${name}, which company is this for — and when is the interview?`;
+  }
+
+  if (interviewPrep && hasCompany && !hasInterviewTimeline) {
+    return `How much time do you have to prepare — days or weeks?`;
+  }
+
+  // ── Study plan — missing hours ────────────────────────────
+  const studyPlan = intent.mode === 'study_plan' || /study plan|roadmap|how to prepare|preparation plan/i.test(msg);
+  const wantsStudyPlan = studyPlan && !hasHours;
+
+  if (wantsStudyPlan && userMessages.length <= 2) {
+    return `Before I build your plan, ${name} — how many hours a day can you realistically give? Be honest, not optimistic.`;
+  }
+
+  // ── Career transition — missing current role ─────────────
+  const careerTransition = /switch|transition|change.*career|become.*engineer|become.*manager|become.*developer/i.test(msg);
+  const hasCurrentRole = /currently|right now|i am a|i work as|my role|my job/i.test(combined);
+
+  if (careerTransition && !hasCurrentRole && userMessages.length <= 2) {
+    return `What's your current role, ${name}? And what's driving this change — a specific opportunity or a longer-term goal?`;
+  }
+
+  // No clarification needed — let AI handle it
+  return null;
+}
+
 function detectIntent(message, student = {}, history = []) {
   const msg = message.toLowerCase().trim();
 
@@ -1196,10 +1287,44 @@ That is an interrogation. Not mentoring.`
   const emotionGuide   = emotionGuides[student.emotion?.toLowerCase()] || emotionGuides.neutral;
   const specialInstruction = student.emotionAdjustments?.specialInstruction || '';
 
-  let prompt = `${baseSystem}
+  // Build personality context string for injection
+  const personalityContext = `
+========================================
+WHO YOU ARE TALKING TO — READ THIS FIRST
+BEFORE YOU FORM A SINGLE WORD OF RESPONSE
+========================================
+You are talking to ${student.name}.
+
+THEIR PERSONALITY: ${student.personality}${student.mbti_type ? ` (${student.mbti_type})` : ''}
+${student.personality_desc ? `What this means: ${student.personality_desc}` : ''}
+
+HOW THEY LEARN: ${student.learning_style.toUpperCase()}
+${student.learning_style === 'hands_on' ? '→ They learn by DOING. Never explain theory first. Give them something to do, try, or build. Theory comes after the experience.' : ''}
+${student.learning_style === 'visual' ? '→ They need to SEE it. Use diagrams described in words, mental images, visual comparisons.' : ''}
+${student.learning_style === 'story' ? '→ They need a STORY first. Real person, real situation, real outcome. Then the concept.' : ''}
+${student.learning_style === 'logical' ? '→ They need FIRST PRINCIPLES. Definition first, then derivation, then application.' : ''}
+
+WHAT DRIVES THEM: ${student.motivators && student.motivators.length > 0 ? student.motivators.join(', ') : 'achievement'}
+THEIR GOAL: ${student.exam_target || 'Not specified'}
+THEIR CURRENT EMOTION: ${student.emotion}
+MENTOR STYLE THEY CHOSE: ${student.persona || 'friend'} — speak in THAT voice
+
+THE MOST IMPORTANT RULE:
+Before you write anything — ask yourself:
+"Given that ${student.name} is ${student.personality} who learns by ${student.learning_style} — 
+what does THIS specific person need to hear right now?
+Not what any student needs. What ${student.name} needs."
+
+If your response could be sent to ANY student — rewrite it.
+It must only make sense for ${student.name}.
+========================================`;
+
+  let prompt = `${personalityContext}
+
+${baseSystem}
 
 ========================================
-STUDENT PROFILE - READ THIS FIRST
+STUDENT PROFILE
 ========================================
 Name: ${student.name}
 Persona Selected: ${student.persona || 'friend'} <- SPEAK IN THIS PERSONA'S VOICE
