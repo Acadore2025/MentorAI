@@ -2368,8 +2368,8 @@ async function sendMessage(){
     const aiMsg = {
       role:              'assistant',
       content:           replyContent,
-      model:             'openai',
-      reason:            'Powered by Tavily + OpenAI',
+      model:             replyMeta.model_used || 'gpt-4o',
+      reason:            replyMeta.routing_reason ? `${modelLabel(replyMeta.model_used)} — ${replyMeta.routing_reason}` : 'Powered by MentorAI',
       emotion:           replyMeta.emotion           || window._lastEmotion || 'neutral',
       rag_hit:           replyMeta.rag_hit            || false,
       rag_score:         replyMeta.rag_score          || null,
@@ -2394,7 +2394,16 @@ async function sendMessage(){
     // Remove stream bubble if it exists (appendBubble will show the final formatted version)
     const streamBubbles = document.querySelectorAll('.stream-bubble');
     streamBubbles.forEach(b => b.remove());
-    appendBubble('assistant', replyContent, 'openai', emotionLabel);
+    const modelUsed = replyMeta.model_used || 'gpt-4o';
+    const routingReason = replyMeta.routing_reason || '';
+    const premiumLeft = replyMeta.premium_used_today !== undefined
+      ? `${20 - replyMeta.premium_used_today} deep sessions left today`
+      : '';
+    const bubbleReason = [
+      window._lastEmotion && window._lastEmotion !== 'neutral' ? `Emotion: ${window._lastEmotion}` : '',
+      premiumLeft
+    ].filter(Boolean).join('  ·  ');
+    appendBubble('assistant', replyContent, modelUsed, bubbleReason || routingReason);
     saveMessages();
     saveMessageToSupabase(aiMsg);
     addXP(15);
@@ -2443,6 +2452,7 @@ async function callProxy(model, msgs){
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model,
+      user_id: currentUser?.id || null,
       messages: msgs.map(m=>({role:m.role, content:m.content})),
       system: buildSystemPrompt(),
       max_tokens: 1024,
@@ -2553,6 +2563,15 @@ function appendBubble(role,text,model,reason){
     tag.className = `model-tag ${model}`;
     tag.innerHTML = `<span class="mdot"></span>${modelLabel(model)}${reason?`  <span style="opacity:0.65;font-weight:300">${reason}</span>`:''}`;
     mw.appendChild(tag);
+    // Thumbs up/down rating
+    const ratingDiv = document.createElement('div');
+    ratingDiv.style.cssText = 'display:flex;gap:8px;margin-top:6px;align-items:center';
+    const msgIndex = messages.length;
+    ratingDiv.innerHTML = `
+      <button onclick="rateMessage(${msgIndex},'up',this)" style="background:transparent;border:1px solid var(--border);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:13px;color:var(--muted);transition:all 0.2s" title="Helpful">👍</button>
+      <button onclick="rateMessage(${msgIndex},'down',this)" style="background:transparent;border:1px solid var(--border);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:13px;color:var(--muted);transition:all 0.2s" title="Not helpful">👎</button>
+      <span id="rating-label-${msgIndex}" style="font-size:11px;color:var(--muted)"></span>`;
+    mw.appendChild(ratingDiv);
   }
   div.appendChild(av);div.appendChild(mw);
   wrap.appendChild(div);
@@ -2587,7 +2606,61 @@ function fmt(t){
     .replace(/^(.+)$/,'<p>$1</p>');
 }
 
-function modelLabel(m){return{claude:'Claude',openai:'GPT-4o',gemini:'Gemini'}[m]||(m||'AI');}
+function modelLabel(m){
+  const labels = {
+    'gpt-4o':                    'GPT-4o',
+    'gpt-4o-mini':               'GPT-4o Mini',
+    'openai':                    'GPT-4o',
+    'claude-sonnet-4-6':         'Claude Sonnet',
+    'claude-3-5-haiku-20241022': 'Claude Haiku',
+    'claude':                    'Claude',
+    'gemini-1.5-flash':          'Gemini Flash',
+    'gemini':                    'Gemini',
+    'llama-3.3-70b-versatile':   'Llama 3.3',
+    'deepseek-chat':             'DeepSeek'
+  };
+  return labels[m] || (m || 'AI');
+}
+
+// Rate a message thumbs up or down
+async function rateMessage(msgIndex, direction, btnEl) {
+  const rating = direction === 'up' ? 1 : -1;
+  const label = document.getElementById(`rating-label-${msgIndex}`);
+
+  // Visual feedback
+  btnEl.parentElement.querySelectorAll('button').forEach(b => {
+    b.style.borderColor = 'var(--border)';
+    b.style.background = 'transparent';
+  });
+  btnEl.style.borderColor = direction === 'up' ? '#22c55e' : '#ef4444';
+  btnEl.style.background = direction === 'up' ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)';
+  if(label) label.textContent = direction === 'up' ? 'Thanks!' : 'Got it';
+
+  // Save to Supabase — find the message by index
+  if(!currentUser) return;
+  try {
+    // Get the last N assistant messages and update the one at this index
+    const { data } = await sb.from('chat_messages')
+      .select('id')
+      .eq('user_id', currentUser.id)
+      .eq('role', 'assistant')
+      .order('created_at', { ascending: false })
+      .limit(30);
+
+    if(data && data.length > 0) {
+      // Find closest message — msgIndex counts from current messages array
+      const assistantMessages = messages.filter(m => m.role === 'assistant');
+      const targetAssistantIdx = assistantMessages.length - (messages.length - msgIndex);
+      const targetRow = data[Math.max(0, data.length - 1 - (targetAssistantIdx || 0))];
+      if(targetRow) {
+        await sb.from('chat_messages').update({ rating }).eq('id', targetRow.id);
+        console.log(`[RATING] Saved ${rating} for message ${targetRow.id}`);
+      }
+    }
+  } catch(e) {
+    console.warn('[RATING] Save failed (non-critical):', e.message);
+  }
+}
 
 let tc=0;
 function showTyping(){
