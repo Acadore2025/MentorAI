@@ -203,6 +203,9 @@ ${webContext}
     const negativeEmotions = ['panicked','frustrated','anxious','stressed'];
     if (negativeEmotions.includes(emotionData.emotion)) issues.push(`Negative emotion: ${emotionData.emotion}`);
 
+    // ── Daily Pattern Recognition ────────────────────────────
+    const psychDiscovery = detectPsychInsight(userMessage, messages.slice(-6), emotionData);
+
     // Add metadata for frontend to save to Supabase
     response.meta = {
       emotion:   emotionData.detected ? emotionData.emotion : student.emotion || 'neutral',
@@ -210,7 +213,9 @@ ${webContext}
       rag_score: null,
       mode:      intent.mode    || 'teaching',
       subject:   intent.subject || null,
-      issue:     issues.length > 0 ? issues.join(' | ') : null
+      issue:     issues.length > 0 ? issues.join(' | ') : null,
+      psych_insight: psychDiscovery.insight || null,
+      psych_key:     psychDiscovery.key     || null
     };
 
     return res.status(200).json(response);
@@ -237,15 +242,19 @@ function extractStudentContext(profile) {
   };
 
   return {
-    name:            profile.name             || 'Student',
-    learning_style:  profile.learning_style   || personalityToStyle[profile.personality_type] || 'visual',
-    personality:     profile.personality_type || 'The Grower',
-    level:           profile.academic_level   || 'Class 11',
-    exam_target:     profile.exam_target      || 'CBSE',
-    emotion:         profile.current_emotion  || 'neutral',
-    weak_subjects:   profile.weak_subjects    || [],
-    strong_subjects: profile.strong_subjects  || [],
-    memory:          profile.memory           || null
+    name:              profile.name             || 'Student',
+    learning_style:    profile.learn_style      || profile.learning_style || personalityToStyle[profile.personality_type] || 'visual',
+    personality:       profile.personality_type || 'The Grower',
+    mbti_type:         profile.mbti_type        || null,
+    primary_interest:  profile.primary_interest || null,
+    eq_strength:       profile.eq_strength      || null,
+    motivators:        profile.motivators       || [],
+    level:             profile.academic_level   || 'Class 11',
+    exam_target:       profile.exam_target      || 'CBSE',
+    emotion:           profile.current_emotion  || 'neutral',
+    weak_subjects:     profile.weak_subjects    || [],
+    strong_subjects:   profile.strong_subjects  || [],
+    memory:            profile.memory           || null
   };
 }
 
@@ -1024,7 +1033,10 @@ STUDENT PROFILE - READ THIS FIRST
 ========================================
 Name: ${student.name}
 Learning Style: ${student.learning_style.toUpperCase()} <- MOST IMPORTANT
-Personality: ${student.personality}
+Personality Type: ${student.personality}${student.mbti_type ? ` (${student.mbti_type})` : ''}
+Primary Interest: ${student.primary_interest || 'Not yet mapped'}
+EQ Strength: ${student.eq_strength || 'Developing'}
+Key Motivators: ${student.motivators && student.motivators.length > 0 ? student.motivators.join(', ') : 'Not yet mapped'}
 Level: ${student.level}
 Target Exam: ${student.exam_target}
 Emotion Right Now: ${student.emotion}
@@ -1208,6 +1220,141 @@ async function callClaude(messages, system) {
   const data = await res.json();
   if (data.error) throw new Error(data.error.message);
   return { content: data.content[0].text, model: 'claude', usage: data.usage };
+}
+
+// ─────────────────────────────────────────────────────────────
+// DAILY PATTERN RECOGNITION
+// Detects natural openings to learn more about the student
+// Saves discoveries silently to user_memory.psych_insights
+// Feels like a real mentor — not a quiz
+// ─────────────────────────────────────────────────────────────
+function detectPsychInsight(message, history, emotionData) {
+  const msg = message.toLowerCase().trim();
+  const recentHistory = history.map(m => (m.content||'').toLowerCase()).join(' ');
+
+  // Map of triggers → what we learn → key to save
+  const discoveries = [
+
+    // Pressure handling
+    {
+      triggers: ['exam tomorrow','exam today','test tomorrow','paper tomorrow','only hours','running out of time'],
+      insight: 'performs under pressure — exam panic triggers detected',
+      key: 'pressure_style:deadline_driven'
+    },
+    {
+      triggers: ['i work better under pressure','i need a deadline','procrastinate until last minute','last minute person'],
+      insight: 'self-identified deadline-driven worker',
+      key: 'pressure_style:needs_deadline'
+    },
+    {
+      triggers: ['i plan everything','i like to plan','plan ahead','schedule it','i make lists'],
+      insight: 'proactive planner — likes structure and preparation',
+      key: 'pressure_style:advance_planner'
+    },
+
+    // How they react when stuck
+    {
+      triggers: ['i give up','want to quit','too hard','cant do this','not smart enough'],
+      insight: 'tends to catastrophize when stuck — needs reframe before content',
+      key: 'stuck_response:gives_up'
+    },
+    {
+      triggers: ['let me try again','ill figure it out','give me a hint','almost got it'],
+      insight: 'resilient when stuck — pushes through with small nudges',
+      key: 'stuck_response:resilient'
+    },
+
+    // Learning preference signals
+    {
+      triggers: ['show me an example','give me an example','can you show','real life example'],
+      insight: 'needs examples before theory — kinesthetic/sensing learner signal',
+      key: 'learn_pref:examples_first'
+    },
+    {
+      triggers: ['explain the concept first','what is the theory','how does it work fundamentally','first principles'],
+      insight: 'prefers theory before examples — intuitive learner signal',
+      key: 'learn_pref:theory_first'
+    },
+    {
+      triggers: ['draw it','can you make a diagram','visualize','picture this','show me visually'],
+      insight: 'requests visual representation — strong visual learner',
+      key: 'learn_pref:visual_confirmed'
+    },
+    {
+      triggers: ['step by step','one step at a time','break it down','slowly','smaller steps'],
+      insight: 'needs chunked learning — prefers structured sequential delivery',
+      key: 'learn_pref:chunked_sequential'
+    },
+
+    // Motivation signals
+    {
+      triggers: ['i want to prove','prove to myself','prove everyone wrong','show them'],
+      insight: 'externally motivated — driven by proving themselves to others',
+      key: 'motivation:prove_others'
+    },
+    {
+      triggers: ['i just love learning','i find this fascinating','genuinely curious','this is interesting'],
+      insight: 'intrinsically motivated — loves learning for its own sake',
+      key: 'motivation:intrinsic_curiosity'
+    },
+    {
+      triggers: ['if i fail','what if i fail','scared of failing','fear of failure','cant afford to fail'],
+      insight: 'fear of failure is primary motivator — needs reassurance + reframe',
+      key: 'motivation:fear_of_failure'
+    },
+
+    // Social/collaboration style
+    {
+      triggers: ['i study alone','i prefer studying alone','distraction when others around','need quiet'],
+      insight: 'solo learner — introvert study preference confirmed',
+      key: 'social_style:solo_learner'
+    },
+    {
+      triggers: ['study group','i learn better with others','explaining to someone','teach someone'],
+      insight: 'social learner — learns by explaining and collaborating',
+      key: 'social_style:collaborative_learner'
+    },
+
+    // Emotional intelligence signals
+    {
+      triggers: ['i know im stressed but','i can feel myself getting anxious','i notice when im'],
+      insight: 'high self-awareness — recognizes own emotional states',
+      key: 'eq:high_self_awareness'
+    },
+    {
+      triggers: ['i dont know why im feeling','i just feel off','something feels wrong','dont know whats wrong'],
+      insight: 'lower emotional self-awareness — feelings arrive without clear source',
+      key: 'eq:developing_self_awareness'
+    },
+
+    // Decision making
+    {
+      triggers: ['i overthink','i keep second guessing','analysis paralysis','cant make a decision'],
+      insight: 'overthinking pattern — needs decisive framing and time-boxing',
+      key: 'decision_style:overthinker'
+    },
+    {
+      triggers: ['i just go for it','i decide quickly','trust my gut','follow my instinct'],
+      insight: 'intuitive fast decision maker — needs to slow down for big decisions',
+      key: 'decision_style:gut_driven'
+    }
+  ];
+
+  // Check current message against all triggers
+  for(const discovery of discoveries){
+    if(discovery.triggers.some(t => msg.includes(t))){
+      return { insight: discovery.insight, key: discovery.key };
+    }
+  }
+
+  // Check recent history for patterns (catches things said a message or two ago)
+  for(const discovery of discoveries){
+    if(discovery.triggers.some(t => recentHistory.includes(t))){
+      return { insight: discovery.insight, key: discovery.key };
+    }
+  }
+
+  return { insight: null, key: null };
 }
 
 async function callGemini(messages, system) {
