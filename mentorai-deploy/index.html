@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"/>
 <title>MentorAI - Your Growth Companion</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet"/>
@@ -219,6 +219,7 @@ pointer-events:none;z-index:0}
   background:rgba(8,10,15,0.97);
   backdrop-filter:blur(20px);
   padding:12px 20px 14px;
+  padding-bottom:max(14px, env(safe-area-inset-bottom));
 }
 
 /* Toolbar row above the input box */
@@ -351,11 +352,89 @@ kbd{
 @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
 
-/* Responsive */
-@media(max-width:480px){
-  .persona-grid{grid-template-columns:1fr 1fr}
+/* ═══════════════════════════════════════════════════════════
+   MOBILE RESPONSIVE — Full overhaul for phones
+   ═══════════════════════════════════════════════════════════ */
+@media(max-width:600px){
+
+  /* ── Onboarding ── */
+  .onboard-card{padding:24px 18px;border-radius:18px}
+  .persona-grid{grid-template-columns:1fr}
   .traits-grid{grid-template-columns:1fr}
   .choice-grid{grid-template-columns:1fr}
+  .result-card{padding:24px 18px;border-radius:18px}
+  .auth-row{grid-template-columns:1fr}
+  .auth-card{padding:24px 18px;border-radius:18px;margin:0 12px}
+  .keys-card{padding:24px 18px}
+
+  /* ── App Header ── */
+  .app-header{padding:10px 14px;gap:6px}
+  .app-logo{font-size:17px}
+  .user-name-small{display:none}
+  .header-actions .icon-btn:not(:last-child){display:none}
+  .persona-indicator{display:none}
+
+  /* ── XP Bar ── */
+  .xp-bar-wrap{padding:5px 14px;gap:8px}
+  .xp-bar{max-width:120px}
+  .xp-label{font-size:10px}
+
+  /* ── Chat ── */
+  #chat-container{padding:16px 12px}
+  .messages-wrap{gap:14px}
+  .msg-wrap{max-width:88%}
+  .bubble{padding:11px 13px;font-size:14px;line-height:1.75}
+  .msg-avatar{width:28px;height:28px;font-size:12px}
+  .model-tag{font-size:10px;padding:2px 7px}
+
+  /* ── Input Area ── */
+  #input-area{padding:8px 12px 10px}
+  .input-toolbar{margin-bottom:6px;gap:4px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
+  .input-toolbar::-webkit-scrollbar{display:none}
+  .toolbar-chip{font-size:10.5px;padding:3px 9px;white-space:nowrap}
+  .kbd-hint{display:none}
+  #user-input{font-size:14px}
+  .input-wrap{border-radius:14px}
+  .input-inner{padding:11px 12px 8px;gap:8px}
+  .input-bottom-bar{padding:6px 10px 8px}
+
+  /* ── Send Button ── */
+  #send-btn{height:32px;padding:0 12px;font-size:11px;border-radius:9px}
+  #send-btn .send-label{display:none}
+
+  /* ── Daily checkin ── */
+  .checkin-card{padding:14px 16px}
+  .checkin-btns{gap:6px}
+  .checkin-btn{font-size:12px;padding:6px 12px}
+
+  /* ── Psychometric test ── */
+  .psych-progress{margin-bottom:20px}
+  .scale-btns{gap:5px}
+  .scale-btn{height:38px;font-size:13px}
+
+  /* ── Welcome screen ── */
+  #screen-welcome .btn-primary{width:100%;max-width:320px}
+
+  /* ── Scrollbar hide on mobile ── */
+  #chat-container::-webkit-scrollbar{display:none}
+
+  /* ── XP popup ── */
+  .xp-popup{top:60px;right:12px;font-size:12px;padding:8px 12px}
+
+  /* ── Route status ── */
+  #route-status{padding:5px 14px;font-size:11px}
+
+  /* ── Study mode ── */
+  .study-mode-banner{margin:8px 12px;padding:10px 12px}
+  .study-choice-row{gap:8px}
+  .study-choice{font-size:12px;padding:8px 12px}
+}
+
+@media(max-width:380px){
+  .app-logo{font-size:15px}
+  .bubble{font-size:13.5px}
+  .toolbar-chip{font-size:10px;padding:3px 8px}
+  .msg-wrap{max-width:92%}
 }
 
 /* -- AUTH SCREEN -- */
