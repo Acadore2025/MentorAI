@@ -186,12 +186,27 @@ ${webContext}
       ];
     }
 
-    // Step 6: Smart model selection
-    // gpt-4o for live web search (accuracy critical)
-    // gpt-4o for all responses - mini cannot follow complex instructions
-    const smartModel = 'gpt-4o';
+    // Step 6: Smart model routing + rate limiting
+    const _responseStart = Date.now();
+
+    // Check how many premium messages used today
+    const premiumUsedToday = await countPremiumMessagesToday(
+      body.user_id || null,
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY
+    );
+    const DAILY_PREMIUM_LIMIT = 20;
+    const premiumAllowed = premiumUsedToday < DAILY_PREMIUM_LIMIT;
+
+    // Route to best model based on message + context
+    const routing = selectBestModel(userMessage, intent, emotionData, webContext, premiumAllowed);
+    const smartModel = routing.model;
+    const isPremium  = routing.isPremium;
+
+    console.log(`[ROUTING] model=${smartModel} | premium=${isPremium} | used=${premiumUsedToday}/${DAILY_PREMIUM_LIMIT} | reason=${routing.reason}`);
 
     const response = await callAI(smartModel, finalMessages, systemPrompt);
+    const _responseTimeMs = Date.now() - _responseStart;
 
     // Detect issues for prompt analysis — saved to chat_messages.issue column
     const issues = [];
@@ -206,16 +221,50 @@ ${webContext}
     // ── Daily Pattern Recognition ────────────────────────────
     const psychDiscovery = detectPsychInsight(userMessage, messages.slice(-6), emotionData);
 
+    // Calculate cost
+    const MODEL_PRICING = {
+      'gpt-4o':                   { input: 2.50,   output: 10.00  },
+      'gpt-4o-mini':              { input: 0.15,   output: 0.60   },
+      'claude-sonnet-4-6':        { input: 3.00,   output: 15.00  },
+      'claude-3-5-haiku-20241022':{ input: 0.80,   output: 4.00   },
+      'gemini-1.5-flash':         { input: 0.075,  output: 0.30   },
+      'llama-3.3-70b-versatile':  { input: 0.05,   output: 0.10   },
+      'deepseek-chat':            { input: 0.014,  output: 0.028  }
+    };
+    const usage    = response.usage || {};
+    const pricing  = MODEL_PRICING[smartModel] || MODEL_PRICING['gpt-4o'];
+    const promptTokens     = usage.prompt_tokens     || usage.input_tokens  || 0;
+    const completionTokens = usage.completion_tokens || usage.output_tokens || 0;
+    const totalTokens      = usage.total_tokens || (promptTokens + completionTokens);
+    const costUSD = (
+      (promptTokens     / 1_000_000) * pricing.input +
+      (completionTokens / 1_000_000) * pricing.output
+    );
+
     // Add metadata for frontend to save to Supabase
     response.meta = {
-      emotion:   emotionData.detected ? emotionData.emotion : student.emotion || 'neutral',
-      rag_hit:   !ragNoContent && !!ragContext,
-      rag_score: null,
-      mode:      intent.mode    || 'teaching',
-      subject:   intent.subject || null,
-      issue:     issues.length > 0 ? issues.join(' | ') : null,
-      psych_insight: psychDiscovery.insight || null,
-      psych_key:     psychDiscovery.key     || null
+      emotion:           emotionData.detected ? emotionData.emotion : student.emotion || 'neutral',
+      rag_hit:           !ragNoContent && !!ragContext,
+      rag_score:         null,
+      mode:              intent.mode    || 'teaching',
+      subject:           intent.subject || null,
+      issue:             issues.length > 0 ? issues.join(' | ') : null,
+      psych_insight:     psychDiscovery.insight || null,
+      psych_key:         psychDiscovery.key     || null,
+      // Model routing
+      rating:            0,
+      session_id:        null,
+      response_time_ms:  _responseTimeMs,
+      model_used:        smartModel,
+      is_premium:        isPremium,
+      routing_reason:    routing.reason,
+      premium_used_today: premiumUsedToday,
+      web_search_used:   !!webContext,
+      rag_score_actual:  null,
+      tokens_prompt:     promptTokens     || null,
+      tokens_completion: completionTokens || null,
+      tokens_total:      totalTokens      || null,
+      cost_usd:          parseFloat(costUSD.toFixed(6)) || null
     };
 
     return res.status(200).json(response);
@@ -1181,9 +1230,103 @@ This overrides your default response style for this one message.`;
 // -------------------------------------------------------------
 // AI MODEL CALLS
 // -------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────
+// SMART MODEL ROUTER
+// ─────────────────────────────────────────────────────────────
+
+// Count today's premium messages for this user from Supabase
+async function countPremiumMessagesToday(userId, supabaseUrl, supabaseKey) {
+  if (!userId || !supabaseUrl || !supabaseKey) return 0;
+  try {
+    const todayIST = new Date();
+    todayIST.setHours(0, 0, 0, 0);
+    const startUTC = new Date(todayIST.getTime() - (5.5 * 60 * 60 * 1000)).toISOString();
+    const url = `${supabaseUrl}/rest/v1/chat_messages?user_id=eq.${userId}&is_premium=eq.true&created_at=gte.${startUTC}&select=id`;
+    const res = await fetch(url, {
+      headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
+    });
+    const data = await res.json();
+    return Array.isArray(data) ? data.length : 0;
+  } catch(e) {
+    console.warn('[RATE-LIMIT] Count failed (non-critical):', e.message);
+    return 0;
+  }
+}
+
+// Select best model based on message intent + premium availability
+function selectBestModel(message, intent, emotionData, webContext, premiumAllowed) {
+  const msg = message.toLowerCase();
+
+  // ── PREMIUM ROUTING (when within 20/day limit) ─────────────
+  if (premiumAllowed) {
+
+    // Emotional support → Claude is best for empathy + nuance
+    if (
+      emotionData.detected &&
+      ['panicked','frustrated','anxious','stressed','demotivated','tired'].includes(emotionData.emotion)
+    ) {
+      return { model: 'claude-sonnet-4-6', isPremium: true, reason: 'Emotional support → Claude' };
+    }
+
+    // Life advice, career guidance, deep personal questions → Claude
+    if (intent.mode === 'emotional_support' || intent.mode === 'socratic_intake') {
+      return { model: 'claude-sonnet-4-6', isPremium: true, reason: 'Life/career guidance → Claude' };
+    }
+
+    // Complex explanation, study plan, exam prep → GPT-4o
+    if (
+      intent.mode === 'teaching' ||
+      intent.mode === 'study_plan' ||
+      intent.mode === 'exam_panic' ||
+      intent.mode === 'comparison' ||
+      intent.needsKnowledge
+    ) {
+      return { model: 'gpt-4o', isPremium: true, reason: 'Deep teaching → GPT-4o' };
+    }
+
+    // Practice questions, check answer → GPT-4o
+    if (intent.mode === 'practice' || intent.mode === 'check_answer') {
+      return { model: 'gpt-4o', isPremium: true, reason: 'Practice/evaluation → GPT-4o' };
+    }
+  }
+
+  // ── FREE ROUTING (after limit OR simple questions) ──────────
+
+  // Web search needed → Gemini Flash (best for current affairs)
+  if (intent.needsWebSearch || webContext) {
+    return { model: 'gemini-1.5-flash', isPremium: false, reason: 'Web/current affairs → Gemini Flash' };
+  }
+
+  // Math, coding, reasoning → DeepSeek (best free for logic)
+  const mathSignals = ['math','maths','calculus','algebra','geometry','equation','solve','proof',
+    'code','python','javascript','algorithm','programming','debug','error in code'];
+  if (mathSignals.some(k => msg.includes(k))) {
+    return { model: 'deepseek-chat', isPremium: false, reason: 'Math/coding → DeepSeek' };
+  }
+
+  // Summary, flashcards, quick revision → Groq Llama (fast + free)
+  if (
+    intent.mode === 'flashcards' ||
+    intent.mode === 'summary' ||
+    intent.mode === 'conversation'
+  ) {
+    return { model: 'llama-3.3-70b-versatile', isPremium: false, reason: 'Quick/conversational → Groq Llama' };
+  }
+
+  // Default free → Groq Llama 3.3 70B (capable + fast)
+  return { model: 'llama-3.3-70b-versatile', isPremium: false, reason: 'General → Groq Llama' };
+}
+
+// ─────────────────────────────────────────────────────────────
+// MODEL CALLERS
+// ─────────────────────────────────────────────────────────────
 async function callAI(model, messages, system) {
-  if (model === 'claude') return callClaude(messages, system);
-  if (model === 'gemini') return callGemini(messages, system);
+  if (model === 'claude-sonnet-4-6')          return callClaude(messages, system, 'claude-sonnet-4-6');
+  if (model === 'claude-3-5-haiku-20241022')   return callClaude(messages, system, 'claude-3-5-haiku-20241022');
+  if (model === 'gemini-1.5-flash')            return callGemini(messages, system);
+  if (model === 'llama-3.3-70b-versatile')     return callGroq(messages, system, 'llama-3.3-70b-versatile');
+  if (model === 'deepseek-chat')               return callDeepSeek(messages, system);
+  if (model === 'gpt-4o-mini')                 return callOpenAI(messages, system, 'gpt-4o-mini');
   return callOpenAI(messages, system, 'gpt-4o');
 }
 
@@ -1207,19 +1350,69 @@ async function callOpenAI(messages, system, modelName = 'gpt-4o') {
   return { content: data.choices[0].message.content, model: modelName, usage: data.usage };
 }
 
-async function callClaude(messages, system) {
+async function callClaude(messages, system, modelName = 'claude-sonnet-4-6') {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error('ANTHROPIC_API_KEY not configured');
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: 'claude-3-5-haiku-20241022', max_tokens: 1200, system, messages })
+    body: JSON.stringify({ model: modelName, max_tokens: 1200, system, messages })
   });
 
   const data = await res.json();
   if (data.error) throw new Error(data.error.message);
-  return { content: data.content[0].text, model: 'claude', usage: data.usage };
+  return { content: data.content[0].text, model: modelName, usage: data.usage };
+}
+
+// ── Groq — Llama 3.3 70B (free, fast) ──────────────────────
+async function callGroq(messages, system, modelName = 'llama-3.3-70b-versatile') {
+  const key = process.env.GROQ_API_KEY;
+  if (!key) {
+    console.warn('[GROQ] No API key — falling back to gpt-4o-mini');
+    return callOpenAI(messages, system, 'gpt-4o-mini');
+  }
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+    body: JSON.stringify({
+      model: modelName,
+      messages: [{ role: 'system', content: system }, ...messages],
+      max_tokens: 1200,
+      temperature: 0.7
+    })
+  });
+  const data = await res.json();
+  if (data.error) {
+    console.warn('[GROQ] Error:', data.error.message, '— falling back to gpt-4o-mini');
+    return callOpenAI(messages, system, 'gpt-4o-mini');
+  }
+  return { content: data.choices[0].message.content, model: modelName, usage: data.usage };
+}
+
+// ── DeepSeek — best free for math/reasoning ────────────────
+async function callDeepSeek(messages, system) {
+  const key = process.env.DEEPSEEK_API_KEY;
+  if (!key) {
+    console.warn('[DEEPSEEK] No API key — falling back to gpt-4o-mini');
+    return callOpenAI(messages, system, 'gpt-4o-mini');
+  }
+  const res = await fetch('https://api.deepseek.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      messages: [{ role: 'system', content: system }, ...messages],
+      max_tokens: 1200,
+      temperature: 0.7
+    })
+  });
+  const data = await res.json();
+  if (data.error) {
+    console.warn('[DEEPSEEK] Error:', data.error.message, '— falling back to gpt-4o-mini');
+    return callOpenAI(messages, system, 'gpt-4o-mini');
+  }
+  return { content: data.choices[0].message.content, model: 'deepseek-chat', usage: data.usage };
 }
 
 // ─────────────────────────────────────────────────────────────
