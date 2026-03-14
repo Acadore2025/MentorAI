@@ -30,26 +30,6 @@ export default async function handler(req, res) {
     // Step 2: Agent routes the message intelligently
     const intent = detectIntent(userMessage, student, messages);
 
-    // Step 2c: Pre-AI Clarification Engine
-    // Intercepts vague messages BEFORE calling AI
-    // Returns direct question without calling GPT-4o at all
-    const clarification = getClarification(userMessage, intent, messages, student);
-    if (clarification) {
-      return res.status(200).json({
-        content: clarification,
-        model:   'mentor-ai',
-        meta: {
-          emotion:   'neutral',
-          rag_hit:   false,
-          mode:      intent.mode,
-          subject:   intent.subject || null,
-          model_used: 'gpt-4o-mini',
-          is_premium: false,
-          routing_reason: 'Clarification — no AI call needed'
-        }
-      });
-    }
-
     // Step 2b: Auto-detect emotion from message
     const emotionData = detectEmotionFromMessage(userMessage, messages.slice(-4));
     if (emotionData.detected) {
@@ -398,15 +378,25 @@ function extractStudentContext(profile) {
 // GPT-4o cannot override this — it never gets called
 // ─────────────────────────────────────────────────────────────
 function getClarification(message, intent, history, student) {
-  const msg = message.toLowerCase().trim();
+  // Strip quotes from message — user sometimes types "message in quotes"
+  const msg = message.toLowerCase().trim().replace(/^["']|["']$/g, '');
   const recentHistory = history.slice(-6).map(m => (m.content||'').toLowerCase()).join(' ');
   const combined = msg + ' ' + recentHistory;
   const name = student.name || 'there';
 
   // ── Already in conversation — don't keep asking ──────────
-  // If we've exchanged 3+ messages on same topic, stop clarifying
+  // If we've exchanged 3+ messages, stop clarifying
   const userMessages = history.filter(m => m.role === 'user');
-  if (userMessages.length > 4) return null;
+  if (userMessages.length > 3) return null;
+  
+  // If bot already asked a clarifying question recently, don't ask again
+  const recentBotMessages = history.slice(-4).filter(m => m.role === 'assistant');
+  const alreadyAsked = recentBotMessages.some(m => 
+    (m.content||'').includes('?') && 
+    ((m.content||'').includes('target') || (m.content||'').includes('level') || 
+     (m.content||'').includes('company') || (m.content||'').includes('hours'))
+  );
+  if (alreadyAsked) return null;
 
   // ── Subject doubt — vague, no specific topic ─────────────
   const subjectDoubt = intent.needsKnowledge &&
@@ -1290,8 +1280,31 @@ That is an interrogation. Not mentoring.`
   // Build personality context string for injection
   const personalityContext = `
 ========================================
-WHO YOU ARE TALKING TO — READ THIS FIRST
-BEFORE YOU FORM A SINGLE WORD OF RESPONSE
+RULE 1 — READ THIS BEFORE ANYTHING ELSE
+========================================
+You are a mentor, not a search engine.
+
+BEFORE giving any plan, explanation, or advice — you must know:
+1. HOW MUCH TIME the student has (exam date, deadline, hours per day)
+2. WHAT SPECIFICALLY is confusing or needed
+3. THEIR CURRENT LEVEL (beginner, some knowledge, advanced)
+
+If ANY of these 3 are missing — ask ONE question to find out.
+Do NOT give a plan. Do NOT explain. Just ask.
+
+ONLY when you know all 3 — give a precise, personalised response.
+
+Examples:
+- "Help me with CBSE Maths" → Ask: "When is your exam? And which chapter is troubling you most?"
+- "I want to prepare for GMAT" → Ask: "Starting fresh or studied before? What's your target score?"
+- "I have a doubt in physics" → Ask: "Which topic? What specifically is confusing?"
+- "Make me a study plan" → Ask: "How much time do you have daily? And when is the deadline?"
+
+One question. Wait. Then help.
+========================================
+
+========================================
+WHO YOU ARE TALKING TO
 ========================================
 You are talking to ${student.name}.
 
