@@ -91,7 +91,8 @@ function buildEmailHTML(data, dateLabel) {
     costToday, costThisMonth, avgResponseMs,
     fastestResponseMs, slowestResponseMs,
     webSearchCount, modelBreakdown,
-    avgRating, ratedMessages
+    avgRating, ratedMessages,
+    modelFailures, fallbackSuccessRate
   } = data;
 
   const subjectRows = subjectBreakdown.map(s =>
@@ -318,6 +319,42 @@ function buildEmailHTML(data, dateLabel) {
     </div>
   </div>
 
+  <!-- Section 9: Model Health & Failures -->
+  <div style="background:#1a1a2e;border-radius:12px;padding:24px;margin-bottom:20px">
+    <h2 style="margin:0 0 16px;font-size:16px;color:#6c63ff;text-transform:uppercase;letter-spacing:1px">🔧 Model Health</h2>
+    <div style="background:#0f0f1a;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:#94a3b8">
+      Fallback Success Rate: 
+      <strong style="color:${fallbackSuccessRate === 100 ? '#22c55e' : fallbackSuccessRate >= 80 ? '#f59e0b' : '#ef4444'}">
+        ${fallbackSuccessRate}%
+      </strong>
+      &nbsp;|&nbsp; No student got an error: 
+      <strong style="color:${fallbackSuccessRate === 100 ? '#22c55e' : '#ef4444'}">
+        ${fallbackSuccessRate === 100 ? '✅ Yes' : '❌ No'}
+      </strong>
+    </div>
+    ${modelFailures && modelFailures.length > 0 ? `
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <thead>
+        <tr style="border-bottom:1px solid #2d2d44">
+          <th style="padding:8px 12px;text-align:left;color:#64748b;font-weight:500">Model</th>
+          <th style="padding:8px 12px;text-align:center;color:#64748b;font-weight:500">Failures</th>
+          <th style="padding:8px 12px;text-align:center;color:#64748b;font-weight:500">Fallback Used</th>
+          <th style="padding:8px 12px;text-align:left;color:#64748b;font-weight:500">Likely Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${modelFailures.map(f => `
+        <tr>
+          <td style="padding:6px 12px;color:#e2e8f0">${f.model}</td>
+          <td style="padding:6px 12px;text-align:center;color:#ef4444;font-weight:600">${f.failures}</td>
+          <td style="padding:6px 12px;text-align:center;color:#4ecdc4">${f.fallback || 'N/A'}</td>
+          <td style="padding:6px 12px;color:#94a3b8">${f.reason}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>` : `
+    <p style="color:#22c55e;font-size:14px;margin:0">✅ All models working perfectly — no failures yesterday</p>`}
+  </div>
+
   <!-- Footer -->
   <div style="text-align:center;padding:16px;color:#475569;font-size:12px">
     MentorAI — Automated Daily Report &nbsp;|&nbsp; mentor-ai-swart.vercel.app
@@ -511,6 +548,56 @@ export default async function handler(req, res) {
       ? Math.round((ragMessages.filter(m => m.rag_hit === true).length / ragMessages.length) * 100)
       : ragHitRate;
 
+    // ── Model failure detection ──────────────────────────────
+    // Detect fallbacks by comparing model_used vs what should have been used
+    // If a message is_premium=false but mode was emotional/teaching → likely a fallback
+    const PREMIUM_MODELS = ['gpt-4o', 'claude-sonnet-4-6', 'claude-3-5-haiku-20241022'];
+    const FREE_MODELS    = ['llama-3.3-70b-versatile', 'gpt-4o-mini', 'gemini-1.5-flash', 'deepseek-chat'];
+
+    // Count messages that used free models but were premium-worthy (likely fallbacks)
+    const likelyFallbacks = assistantMessages.filter(m =>
+      FREE_MODELS.includes(m.model_used) &&
+      ['emotional_support','teaching','practice','study_plan','exam_panic'].includes(m.mode)
+    );
+
+    // Build failure summary per model
+    const failureMap = {};
+    likelyFallbacks.forEach(m => {
+      // Infer which premium model was likely attempted based on mode
+      const attempted = ['emotional_support','socratic_intake'].includes(m.mode)
+        ? 'claude-sonnet-4-6' : 'gpt-4o';
+      if (!failureMap[attempted]) failureMap[attempted] = { failures: 0, fallback: m.model_used };
+      failureMap[attempted].failures += 1;
+      failureMap[attempted].fallback = m.model_used;
+    });
+
+    const FAILURE_REASONS = {
+      'claude-sonnet-4-6':         'Insufficient Anthropic credits or rate limit',
+      'gpt-4o':                    'OpenAI quota exceeded or API error',
+      'gemini-1.5-flash':          'Gemini API limit or key issue',
+      'llama-3.3-70b-versatile':   'Groq rate limit',
+      'deepseek-chat':             'DeepSeek API error'
+    };
+
+    const modelFailures = Object.entries(failureMap)
+      .map(([model, d]) => ({
+        model,
+        failures: d.failures,
+        fallback: d.fallback,
+        reason: FAILURE_REASONS[model] || 'Unknown error'
+      }))
+      .sort((a, b) => b.failures - a.failures);
+
+    const totalMessages2 = assistantMessages.length;
+    const fallbackSuccessRate = totalMessages2 > 0
+      ? Math.round(((totalMessages2 - (likelyFallbacks.length > 0 ? 0 : 0)) / totalMessages2) * 100)
+      : 100;
+    // Since we always fallback successfully, rate is 100% unless we have hard errors
+    const hardErrors = assistantMessages.filter(m => !m.content || m.content.length < 10).length;
+    const realFallbackRate = totalMessages2 > 0
+      ? Math.round(((totalMessages2 - hardErrors) / totalMessages2) * 100)
+      : 100;
+
     // ── Assemble report data ─────────────────────────────────
     const reportData = {
       totalMessages,
@@ -538,7 +625,9 @@ export default async function handler(req, res) {
       webSearchCount,
       modelBreakdown,
       avgRating,
-      ratedMessages
+      ratedMessages,
+      modelFailures,
+      fallbackSuccessRate: realFallbackRate
     };
 
     // ── Build HTML ───────────────────────────────────────────
