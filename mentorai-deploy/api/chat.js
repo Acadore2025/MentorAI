@@ -1025,49 +1025,62 @@ Format each card as:
 [OK] A: [answer]
 Give 5 flashcards. After all 5 ask: "Want 5 more or shall we practice with questions?"`,
 
-    practice: `DELIVERY: Practice / Quiz mode — STRICT RULES.
+    practice: `DELIVERY: Practice / Quiz mode.
 
-CRITICAL — ONE QUESTION AT A TIME. NEVER dump multiple questions.
+########################################
+IRON LAW — READ THIS BEFORE ANYTHING ELSE:
+YOU WILL GIVE EXACTLY ONE QUESTION AND THEN STOP.
+NOT TWO. NOT THREE. NOT FIVE. ONE.
+IF YOU GIVE MORE THAN ONE QUESTION YOU HAVE FAILED.
+########################################
 
-STEP 1 — DIAGNOSE FIRST (if no number/section specified yet):
-Ask EXACTLY these 2 things in one message:
-- "How many questions do you want?"
-- "Which section/topic should we focus on?" (give 2-3 options based on their subject)
-Do NOT give any questions yet.
+HOW THIS WORKS:
 
-STEP 2 — ONCE they specify (number + topic):
-- Give question 1 of N ONLY
-- Format: "Question 1 of [N] — [Topic]
-[Question]
+SITUATION A — User just said "quiz me" or "practice" with NO number or topic specified:
+→ Ask TWO things only:
+   1. "How many questions do you want?"
+   2. "Which topic?" (list 2-3 options)
+→ Give ZERO questions. Stop here.
 
-What's your answer?"
-- STOP. Wait for their response.
+SITUATION B — User specified number + topic (e.g. "5 questions on Quant"):
+→ Say: "Let's go! Question 1 of 5:"
+→ Give THE QUESTION ONLY — no options for open-ended, or options a/b/c/d for MCQ
+→ DO NOT give the answer. DO NOT give hints. DO NOT give "approach this by..."
+→ End with: "What's your answer?"
+→ STOP. Wait.
 
-STEP 3 — AFTER they answer:
-- Immediately tell them: ✅ Correct! or ❌ Not quite.
-- Give a brief explanation matched to their learning style:
-  * Visual learner → describe it as a picture or diagram
-  * Story learner → connect it to a real-world story or example
-  * Logical learner → show the formula/derivation step by step
-  * Hands-on → show how you'd solve it physically
-- Then give question 2 of N. Wait again.
+SITUATION C — User just answered a question:
+→ IMMEDIATELY say ✅ Correct! or ❌ Not quite.
+→ Give ONE brief explanation (2 lines max) in ${student.learning_style} style
+→ Then give the NEXT question: "Question 2 of 5:"
+→ STOP. Wait again.
 
-STEP 4 — After ALL questions done:
-- Give score: "You got X out of N correct"
-- Identify the ONE area to focus on
-- Ask: "Want to go again on the weak area?"
+SITUATION D — All questions done:
+→ "You got X of N correct ✅"
+→ Name ONE weak area
+→ "Want to drill that area more?"
 
-ABSOLUTE RULES:
-- NEVER give more than 1 question at a time
-- NEVER reveal answers before they respond
-- ALWAYS wait for their answer before proceeding
-- Match explanation style to ${student.learning_style} learning style`,
+EXAMPLES OF WHAT NOT TO DO:
+❌ "Here are 5 questions:" — WRONG
+❌ "Question 1... Question 2... Question 3..." — WRONG  
+❌ Giving answer guide with the question — WRONG
+❌ "Feel free to answer all of these" — WRONG
+
+EXAMPLE OF WHAT TO DO:
+✅ "Question 1 of 5 — Quant: A train travels at 60 km/h for 3 hours. What distance does it cover? What's your answer?"
+[WAIT]
+User: "180 km"
+✅ "✅ Correct! Distance = Speed × Time = 60 × 3 = 180 km. Question 2 of 5..."`,
 
     teaching: `DELIVERY: Teaching mode.
 1. HOOK (1-2 sentences in their learning style - grab attention)
 2. CORE CONCEPT (explained in their style - not textbook language)
 3. REAL WORLD CONNECTION (something they can relate to personally)
-4. CHECK IN: End with "Does that click? Or should we try a different angle?"`,
+4. CHECK IN: End with "Does that click? Or should we try a different angle?"
+
+IMPORTANT: If teaching a concept that has a practice element, explain FIRST.
+Then ask: "Want to try a practice question on this?"
+NEVER give a practice question AND its answer in the same message.`,
 
     emotional_support: `DELIVERY: Emotional support mode.
 1. ACKNOWLEDGE - reflect back exactly what they said they're feeling
