@@ -20,6 +20,7 @@ export default async function handler(req, res) {
     const model          = body.model    || 'openai';
     const userId         = body.user_id  || null;
     const userEmail      = body.user_email || studentProfile.email || null;
+    const quizState      = body.quiz_state || null; // tracks current quiz progress
 
     const userMessage = messages[messages.length - 1]?.content || '';
 
@@ -130,6 +131,23 @@ IMPORTANT: End your response with exactly this line on its own:
 
     // Step 4: Build the full teaching prompt (now with socraticInstruction available)
     intent._socraticInstruction = socraticInstruction;
+
+    // ── Quiz Interceptor ──────────────────────────────────────
+    // If user asks for N questions, intercept and enforce ONE at a time
+    const quizMatch = userMessage.match(/quiz.*?(\d+)\s*question/i) ||
+                      userMessage.match(/(\d+)\s*question.*quiz/i) ||
+                      userMessage.match(/give.*?(\d+)\s*question/i);
+    if (quizMatch && intent.mode === 'practice') {
+      const totalQ = parseInt(quizMatch[1]);
+      const currentQ = quizState ? quizState.current : 1;
+      intent._quizInstruction = `
+You are in a quiz session. Total questions: ${totalQ}. Current question: ${currentQ} of ${totalQ}.
+GIVE ONLY QUESTION ${currentQ}. ONE QUESTION ONLY.
+Format: "Question ${currentQ} of ${totalQ} — [Topic]\n[Question]\n\nWhat is your answer?"
+DO NOT give question ${currentQ + 1} or any other question.
+DO NOT reveal the answer.
+STOP after the question.`;
+    }
     // -- SOLID TIME COMPASS - injected on every request ----------
     const _now        = new Date();
     const _year       = _now.getFullYear();
@@ -320,7 +338,17 @@ function extractStudentContext(profile) {
 
   return {
     name:              profile.name             || 'Student',
-    learning_style:    profile.learning_style   || profile.learn_style || personalityToStyle[profile.personality_type] || 'visual',
+    learning_style:    (function() {
+      const raw = profile.learning_style || profile.learn_style || '';
+      const map = {
+        'visual':'visual','diagram':'visual','chart':'visual',
+        'hands_on':'hands_on','hands-on':'hands_on','doing':'hands_on','project':'hands_on','building':'hands_on','practical':'hands_on',
+        'story':'story','narrative':'story','example':'story',
+        'logical':'logical','analytical':'logical','data':'logical'
+      };
+      const key = Object.keys(map).find(k => raw.toLowerCase().includes(k));
+      return key ? map[key] : (personalityToStyle[profile.personality_type] || 'visual');
+    })(),
     personality:       profile.personality_type || 'The Grower',
     personality_desc:  profile.personality_desc || '',
     persona:           profile.persona          || 'friend',
@@ -1362,6 +1390,19 @@ Do NOT make up specific facts, page numbers, chapter references, or claim conten
 Answer from your general knowledge as a knowledgeable mentor.`;
   }
   
+
+  // Quiz interceptor — OVERRIDE to enforce one question at a time
+  if (intent._quizInstruction) {
+    return `You are ${student.name}'s personal mentor running a quiz session.
+
+${intent._quizInstruction}
+
+Student name: ${student.name}
+Learning style: ${student.learning_style}
+Topic: ${intent.subject || 'the requested subject'}
+
+ABSOLUTE RULE: Give exactly ONE question. Wait for their answer. Nothing else.`;
+  }
 
   // Socratic intake - OVERRIDE everything with a simple, laser-focused prompt
   if (intent._socraticInstruction) {
