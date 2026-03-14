@@ -940,12 +940,16 @@ async function loadUserProfile(){
     profile.role = data.role || '';
     profile.goal = data.goal || '';
     profile.timeline = data.timeline || '';
-    profile.learnStyle = data.learn_style || '';
-    profile.personalityType = data.personality_type || '';
-    profile.personalityEmoji = data.personality_emoji || '';
-    profile.personalityDesc = data.personality_desc || '';
-    profile.persona = data.persona || 'coach';
-    profile.traits = data.traits || {};
+    profile.learnStyle      = data.learn_style       || '';
+    profile.personalityType = data.personality_type  || '';
+    profile.personalityEmoji= data.personality_emoji || '';
+    profile.personalityDesc = data.personality_desc  || '';
+    profile.persona         = data.persona           || 'coach';
+    profile.traits          = data.traits            || {};
+    profile.mbtiType        = data.mbti_type         || null;
+    profile.primaryInterest = data.primary_interest  || null;
+    profile.eqStrength      = data.eq_strength       || null;
+    profile.motivators      = data.motivators        || [];
     profile.xp = data.xp || 0;
     profile.level = data.level || 1;
     profile.streak = data.streak || 0;
@@ -1838,12 +1842,16 @@ async function saveKeysAndStart(){
       role: profile.role || null,
       goal: profile.goal || null,
       timeline: profile.timeline || null,
-      learn_style: profile.learnStyle || null,
-      personality_type: profile.personalityType || null,
+      learn_style:       profile.learnStyle      || null,
+      personality_type:  profile.personalityType  || null,
       personality_emoji: profile.personalityEmoji || null,
-      personality_desc: profile.personalityDesc || null,
-      persona: profile.persona || 'coach',
-      traits: profile.traits || {},
+      personality_desc:  profile.personalityDesc  || null,
+      persona:           profile.persona          || 'coach',
+      traits:            profile.traits           || {},
+      mbti_type:         profile.mbtiType         || null,
+      primary_interest:  profile.primaryInterest  || null,
+      eq_strength:       profile.eqStrength       || null,
+      motivators:        profile.motivators       || [],
       xp: 0, level: 1, streak: 1,
       last_visit: new Date().toDateString()
     });
@@ -2644,14 +2652,33 @@ async function callProxy(model, msgs){
       system: buildSystemPrompt(),
       max_tokens: 1024,
       profile: {
+        // Core identity
         name:             profile.name             || '',
         personality_type: profile.personalityType  || 'The Grower',
+        personality_desc: profile.personalityDesc  || '',
+        persona:          profile.persona          || 'friend',
+        // Psychometric profile — CRITICAL for personalisation
+        mbti_type:        profile.mbtiType         || null,
         learning_style:   profile.learnStyle       || 'visual',
+        mbti_type:        profile.mbtiType         || null,
+        primary_interest: profile.primaryInterest  || null,
+        eq_strength:      profile.eqStrength       || null,
+        motivators:       profile.motivators       || [],
+        primary_interest: profile.primaryInterest  || null,
+        eq_strength:      profile.eqStrength       || null,
+        motivators:       profile.motivators       || [],
+        traits:           profile.traits           || {},
+        // Academic context
         academic_level:   profile.role             || 'Student',
         exam_target:      profile.goal             || 'CBSE',
+        timeline:         profile.timeline         || null,
+        // Emotional state
         current_emotion:  profile.currentEmotion   || 'neutral',
+        // Subjects
         weak_subjects:    profile.weakSubjects      || [],
-        strong_subjects:  profile.strongSubjects    || []
+        strong_subjects:  profile.strongSubjects    || [],
+        // Memory — most important for continuity
+        memory:           profile.memory           || null
       }
     })
   });
