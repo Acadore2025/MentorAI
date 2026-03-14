@@ -1671,7 +1671,19 @@ function detectPsychInsight(message, history, emotionData) {
 // ─────────────────────────────────────────────────────────────
 
 function detectProactiveTrigger(message, history, meta) {
-  const msg = message.toLowerCase();
+  const msg = message.toLowerCase().trim();
+
+  // ── HARD FILTER — skip short/casual messages immediately ──
+  // Must be at least 5 words AND contain a goal/topic keyword
+  const wordCount = msg.split(' ').filter(w => w.length > 0).length;
+  if (wordCount < 5) return null;
+
+  const hasGoalKeyword = [
+    'prepare', 'preparation', 'study', 'learn', 'crack', 'clear',
+    'interview', 'exam', 'target', 'goal', 'month', 'week', 'days'
+  ].some(k => msg.includes(k));
+  if (!hasGoalKeyword) return null;
+
   const recentHistory = history.slice(-6).map(m => (m.content||'').toLowerCase()).join(' ');
   const combined = msg + ' ' + recentHistory;
 
