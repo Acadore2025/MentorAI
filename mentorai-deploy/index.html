@@ -994,16 +994,216 @@ let recognition = null;
 let isRecording = false;
 
 const PSYCH_QUESTIONS = [
-  {q:"I stick to my plans even when things get hard or boring.",trait:"conscientiousness"},
-  {q:"I get excited by new ideas even before finishing what I started.",trait:"openness"},
-  {q:"I learn best by actually doing things, not just reading or watching.",trait:"kinesthetic"},
-  {q:"I am at my sharpest and most productive in the morning.",trait:"earlyRiser"},
-  {q:"When I set a goal, I track my progress regularly without being told to.",trait:"conscientiousness"},
-  {q:"I often have grand visions but struggle to break them into small daily actions.",trait:"executionGap"},
-  {q:"I prefer listening to podcasts/lectures over reading articles to absorb new concepts.",trait:"auditory"},
-  {q:"I feel drained after long social interactions and need alone time to recharge.",trait:"introversion"},
-  {q:"I tend to procrastinate on tasks that feel overwhelming or unclear.",trait:"neuroticism"},
-  {q:"I perform better when someone is holding me accountable externally.",trait:"accountability"},
+  // Q1 — MBTI: E vs I (scenario)
+  {
+    type: 'scenario',
+    q: "Your exam results just came out. You scored lower than expected. What's your first instinct?",
+    options: [
+      { label: "I need to be alone to process this", traits: { introversion: 2 } },
+      { label: "I want to talk to someone about it immediately", traits: { extraversion: 2 } },
+      { label: "I start analyzing exactly where I went wrong", traits: { thinking: 2 } },
+      { label: "I focus on how to feel better first", traits: { feeling: 2 } }
+    ]
+  },
+  // Q2 — VARK: Learning style (scenario)
+  {
+    type: 'scenario',
+    q: "You're trying to understand a new concept. Which approach works best for you?",
+    options: [
+      { label: "Watch a diagram, chart or video", traits: { visual: 3 } },
+      { label: "Listen to someone explain it out loud", traits: { auditory: 3 } },
+      { label: "Read notes and write it down myself", traits: { readwrite: 3 } },
+      { label: "Try it hands-on with real examples", traits: { kinesthetic: 3 } }
+    ]
+  },
+  // Q3 — MBTI: S vs N (scenario)
+  {
+    type: 'scenario',
+    q: "A friend asks for your advice on a big decision. You naturally tend to:",
+    options: [
+      { label: "Give practical steps based on what's worked before", traits: { sensing: 2 } },
+      { label: "Explore all the future possibilities and what could be", traits: { intuition: 2 } },
+      { label: "List pros and cons objectively", traits: { thinking: 2 } },
+      { label: "Ask how they feel about each option", traits: { feeling: 2 } }
+    ]
+  },
+  // Q4 — EQ: Pressure handling (scenario)
+  {
+    type: 'scenario',
+    q: "You have 3 hours left before an important exam and feel completely blank. You:",
+    options: [
+      { label: "Panic for a bit, then force yourself to focus on key topics only", traits: { neuroticism: 1, conscientiousness: 1 } },
+      { label: "Stay calm — you trust your preparation and review calmly", traits: { eq_regulation: 3 } },
+      { label: "Call someone to talk you through it", traits: { extraversion: 1, eq_social: 1 } },
+      { label: "Give up mentally — the anxiety takes over completely", traits: { neuroticism: 3 } }
+    ]
+  },
+  // Q5 — RIASEC: Primary interest (rank — pick top 2)
+  {
+    type: 'rank',
+    q: "Which of these activities excite you most? Pick your top 2:",
+    options: [
+      { label: "🔬 Solving complex problems & research", traits: { investigative: 3 } },
+      { label: "🎨 Creating art, design or original content", traits: { artistic: 3 } },
+      { label: "🤝 Teaching, coaching or helping others", traits: { social: 3 } },
+      { label: "⚙️ Building, fixing or making things", traits: { realistic: 3 } },
+      { label: "🚀 Leading teams or starting ventures", traits: { enterprising: 3 } },
+      { label: "📊 Organizing, planning and managing data", traits: { conventional: 3 } }
+    ],
+    maxSelect: 2
+  },
+  // Q6 — Career Motivator (slider)
+  {
+    type: 'slider',
+    q: "How important is financial success to you compared to doing meaningful work?",
+    leftLabel: "Meaning over money",
+    rightLabel: "Money is the goal",
+    traits: { motivator_financial: true }
+  },
+  // Q7 — MBTI: J vs P (scenario)
+  {
+    type: 'scenario',
+    q: "You have a week-long project. How do you naturally approach it?",
+    options: [
+      { label: "Plan it out day by day from the start", traits: { judging: 3 } },
+      { label: "Start whenever inspiration hits and figure it out as I go", traits: { perceiving: 3 } },
+      { label: "Set a rough plan but stay flexible", traits: { perceiving: 1, judging: 1 } },
+      { label: "Work best under pressure — I leave it late on purpose", traits: { perceiving: 2, neuroticism: 1 } }
+    ]
+  },
+  // Q8 — EQ: Self-awareness (quicktap)
+  {
+    type: 'quicktap',
+    q: "When I'm stressed, I usually know exactly why I'm feeling that way.",
+    options: [
+      { label: "Yes, always", traits: { eq_awareness: 3 } },
+      { label: "Sometimes", traits: { eq_awareness: 1 } },
+      { label: "Rarely — it hits me out of nowhere", traits: { eq_awareness: 0 } }
+    ]
+  },
+  // Q9 — Career Motivator (slider)
+  {
+    type: 'slider',
+    q: "How much do you value independence vs working in a team?",
+    leftLabel: "I thrive in teams",
+    rightLabel: "I work best alone",
+    traits: { motivator_independence: true }
+  },
+  // Q10 — MBTI: T vs F deeper (scenario)
+  {
+    type: 'scenario',
+    q: "Your close friend made a big mistake that hurt others. You would most naturally:",
+    options: [
+      { label: "Tell them directly and honestly what they did wrong", traits: { thinking: 3 } },
+      { label: "Focus on how they're feeling first before anything else", traits: { feeling: 3 } },
+      { label: "Help them fix the damage practically", traits: { thinking: 1, sensing: 1 } },
+      { label: "Avoid the confrontation — it'll pass", traits: { feeling: 1, neuroticism: 1 } }
+    ]
+  },
+  // Q11 — EQ: Pressure/failure handling (scenario)
+  {
+    type: 'scenario',
+    q: "You fail at something you worked hard on. After the initial sting, what do you actually do?",
+    options: [
+      { label: "Analyze what went wrong and make a new plan immediately", traits: { conscientiousness: 2, eq_regulation: 1 } },
+      { label: "Take time to process the emotions before moving on", traits: { feeling: 1, eq_awareness: 2 } },
+      { label: "Talk to someone — processing out loud helps me", traits: { extraversion: 2, eq_social: 1 } },
+      { label: "It haunts me for a while — I replay it repeatedly", traits: { neuroticism: 3 } }
+    ]
+  },
+  // Q12 — VARK + Learning deeper (quicktap)
+  {
+    type: 'quicktap',
+    q: "When learning something new, I prefer theory first and then examples.",
+    options: [
+      { label: "Yes — understand the concept first", traits: { intuition: 1, readwrite: 1 } },
+      { label: "No — show me examples first", traits: { kinesthetic: 2, sensing: 1 } },
+      { label: "Depends on the topic", traits: { sensing: 1 } }
+    ]
+  },
+  // Q13 — Career Motivator (slider)
+  {
+    type: 'slider',
+    q: "How driven are you by recognition and achievement vs simply personal growth?",
+    leftLabel: "Personal growth only",
+    rightLabel: "Recognition matters a lot",
+    traits: { motivator_achievement: true }
+  },
+  // Q14 — RIASEC secondary (scenario)
+  {
+    type: 'scenario',
+    q: "If you could spend an entire year doing just ONE of these, which would you choose?",
+    options: [
+      { label: "Building a product or startup from scratch", traits: { enterprising: 3, realistic: 1 } },
+      { label: "Researching and writing about a subject you love", traits: { investigative: 3, readwrite: 2 } },
+      { label: "Teaching or mentoring people who need guidance", traits: { social: 3 } },
+      { label: "Creating — art, music, design, stories", traits: { artistic: 3 } }
+    ]
+  },
+  // Q15 — MBTI: E vs I deeper (quicktap)
+  {
+    type: 'quicktap',
+    q: "After a long productive day working alone, I feel:",
+    options: [
+      { label: "Energized — I love deep solo work", traits: { introversion: 3 } },
+      { label: "Fine but ready to connect with people", traits: { introversion: 1, extraversion: 1 } },
+      { label: "Drained — I need people to recharge", traits: { extraversion: 3 } }
+    ]
+  },
+  // Q16 — EQ: Conflict/social handling (scenario)
+  {
+    type: 'scenario',
+    q: "Someone publicly criticizes your work in front of others. Your honest reaction:",
+    options: [
+      { label: "Stay calm, respond with facts, don't take it personally", traits: { eq_regulation: 3, thinking: 1 } },
+      { label: "Feel hurt inside but act composed on the outside", traits: { feeling: 2, eq_regulation: 1 } },
+      { label: "Get defensive immediately — it's hard not to", traits: { neuroticism: 2, feeling: 1 } },
+      { label: "Use it as data — what can I actually improve?", traits: { eq_awareness: 2, conscientiousness: 2 } }
+    ]
+  },
+  // Q17 — Career Motivator (slider)
+  {
+    type: 'slider',
+    q: "How important is job security and stability to you vs taking risks for big rewards?",
+    leftLabel: "Security first always",
+    rightLabel: "High risk, high reward",
+    traits: { motivator_security: true }
+  },
+  // Q18 — Conscientiousness / Execution (scenario)
+  {
+    type: 'scenario',
+    q: "You have a big dream or goal. What's most true about how you operate?",
+    options: [
+      { label: "I plan thoroughly and execute step by step", traits: { conscientiousness: 3, judging: 2 } },
+      { label: "I have the vision but struggle to start or follow through", traits: { executionGap: 3, intuition: 1 } },
+      { label: "I start strong but lose momentum halfway", traits: { executionGap: 2, openness: 1 } },
+      { label: "I dive in without much planning and figure it out", traits: { perceiving: 2, kinesthetic: 1 } }
+    ]
+  },
+  // Q19 — VARK final (rank — pick top 2)
+  {
+    type: 'rank',
+    q: "When you need to remember something important, you naturally:",
+    options: [
+      { label: "📝 Write it down or make notes", traits: { readwrite: 3 } },
+      { label: "🖼️ Create a visual map or diagram in my head", traits: { visual: 3 } },
+      { label: "🗣️ Say it out loud or explain it to someone", traits: { auditory: 3 } },
+      { label: "🏃 Connect it to something I've done or experienced", traits: { kinesthetic: 3 } },
+      { label: "🔁 Repeat it until it sticks", traits: { readwrite: 1, auditory: 1 } }
+    ],
+    maxSelect: 2
+  },
+  // Q20 — Motivation + identity (scenario)
+  {
+    type: 'scenario',
+    q: "Deep down, what drives you most when things get hard?",
+    options: [
+      { label: "Proving to myself I can do it", traits: { conscientiousness: 2, motivator_achievement: 2 } },
+      { label: "Not wanting to let people I care about down", traits: { feeling: 2, eq_social: 1 } },
+      { label: "The vision of what I'm building toward", traits: { intuition: 2, openness: 2 } },
+      { label: "Honestly — fear of failure more than love of success", traits: { neuroticism: 2, motivator_achievement: 1 } }
+    ]
+  }
 ];
 
 const PERSONA_PROMPTS = {
@@ -1192,26 +1392,120 @@ function prevOnboard(){
 // ===============================================================
 // PSYCHOMETRIC
 // ===============================================================
+
+// Track multi-select answers for rank questions
+let psychRankSelections = {};
+let psychSliderValues = {};
+
 function renderPsychQ(idx){
   currentPsychQ = idx;
   const q = PSYCH_QUESTIONS[idx];
-  const pct = (idx / PSYCH_QUESTIONS.length)*100;
-  document.getElementById('psych-bar').style.width = pct+'%';
+  const pct = ((idx) / PSYCH_QUESTIONS.length) * 100;
+  document.getElementById('psych-bar').style.width = pct + '%';
   document.getElementById('psych-title').textContent = `Question ${idx+1} of ${PSYCH_QUESTIONS.length}`;
   document.getElementById('psych-next').disabled = !psychAnswers[idx];
 
-  document.getElementById('psych-questions').innerHTML = `
-    <p class="psych-q">${q.q}</p>
-    <div class="scale-labels"><span>Strongly Disagree</span><span>Strongly Agree</span></div>
-    <div class="scale-btns">
-      ${[1,2,3,4,5].map(n=>`<button class="scale-btn ${psychAnswers[idx]===n?'selected':''}" onclick="selectScale(${n},this)">${n}</button>`).join('')}
-    </div>`;
+  const container = document.getElementById('psych-questions');
+
+  if(q.type === 'scenario'){
+    container.innerHTML = `
+      <p class="psych-q">${q.q}</p>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px">
+        ${q.options.map((opt, i) => `
+          <button class="choice-btn ${psychAnswers[idx]===i?'selected':''}"
+            onclick="selectScenario(${i},this)"
+            style="text-align:left;padding:14px 16px;font-size:14px;line-height:1.5">
+            ${opt.label}
+          </button>`).join('')}
+      </div>`;
+  }
+  else if(q.type === 'slider'){
+    const saved = psychSliderValues[idx] !== undefined ? psychSliderValues[idx] : 3;
+    container.innerHTML = `
+      <p class="psych-q">${q.q}</p>
+      <div style="margin:20px 0 8px">
+        <input type="range" min="1" max="5" value="${saved}"
+          style="width:100%;accent-color:var(--accent);cursor:pointer"
+          oninput="selectSlider(${idx}, this.value)">
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:20px">
+        <span>${q.leftLabel}</span>
+        <span>${q.rightLabel}</span>
+      </div>`;
+    // Auto-enable next for slider (has a default)
+    if(psychSliderValues[idx] === undefined){
+      psychSliderValues[idx] = 3;
+      psychAnswers[idx] = 3;
+      document.getElementById('psych-next').disabled = false;
+    }
+  }
+  else if(q.type === 'rank'){
+    const sel = psychRankSelections[idx] || [];
+    container.innerHTML = `
+      <p class="psych-q">${q.q}</p>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px">
+        ${q.options.map((opt, i) => `
+          <button class="choice-btn ${sel.includes(i)?'selected':''}"
+            onclick="selectRank(${idx},${i},${q.maxSelect},this)"
+            style="text-align:left;padding:14px 16px;font-size:14px">
+            ${opt.label}
+          </button>`).join('')}
+      </div>
+      <div style="font-size:12px;color:var(--muted);text-align:center">Select ${q.maxSelect}</div>`;
+  }
+  else if(q.type === 'quicktap'){
+    container.innerHTML = `
+      <p class="psych-q">${q.q}</p>
+      <div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">
+        ${q.options.map((opt, i) => `
+          <button class="choice-btn ${psychAnswers[idx]===i?'selected':''}"
+            onclick="selectQuicktap(${i},this)"
+            style="flex:1;min-width:80px;text-align:center;padding:14px 10px;font-size:14px">
+            ${opt.label}
+          </button>`).join('')}
+      </div>`;
+  }
 }
 
-function selectScale(val, el){
-  document.querySelectorAll('.scale-btn').forEach(b=>b.classList.remove('selected'));
+function selectScenario(optIdx, el){
+  el.closest('[style]').querySelectorAll('.choice-btn').forEach(b=>b.classList.remove('selected'));
   el.classList.add('selected');
-  psychAnswers[currentPsychQ] = val;
+  psychAnswers[currentPsychQ] = optIdx;
+  document.getElementById('psych-next').disabled = false;
+}
+
+function selectSlider(idx, val){
+  psychSliderValues[idx] = parseInt(val);
+  psychAnswers[idx] = parseInt(val);
+  document.getElementById('psych-next').disabled = false;
+}
+
+function selectRank(qIdx, optIdx, maxSelect, el){
+  if(!psychRankSelections[qIdx]) psychRankSelections[qIdx] = [];
+  const sel = psychRankSelections[qIdx];
+  if(sel.includes(optIdx)){
+    psychRankSelections[qIdx] = sel.filter(i=>i!==optIdx);
+    el.classList.remove('selected');
+  } else {
+    if(sel.length >= maxSelect){
+      // Deselect the first selected
+      const first = sel[0];
+      psychRankSelections[qIdx] = sel.slice(1);
+      document.querySelectorAll('.choice-btn')[first] && document.querySelectorAll('.choice-btn').forEach(b=>{
+        if(b.textContent.trim() === PSYCH_QUESTIONS[qIdx].options[first].label.trim()) b.classList.remove('selected');
+      });
+    }
+    psychRankSelections[qIdx].push(optIdx);
+    el.classList.add('selected');
+  }
+  psychAnswers[qIdx] = psychRankSelections[qIdx].length > 0 ? psychRankSelections[qIdx] : undefined;
+  document.getElementById('psych-next').disabled = !(psychAnswers[qIdx] && psychAnswers[qIdx].length === maxSelect);
+}
+
+function selectQuicktap(optIdx, el){
+  el.closest('[style]').querySelectorAll('.choice-btn').forEach(b=>b.classList.remove('selected'));
+  el.classList.add('selected');
+  psychAnswers[currentPsychQ] = optIdx;
   document.getElementById('psych-next').disabled = false;
 }
 
@@ -1225,50 +1519,143 @@ function nextPsychQ(){
 }
 
 function computePersonality(){
-  const scores = {conscientiousness:0,openness:0,kinesthetic:0,earlyRiser:0,executionGap:0,auditory:0,introversion:0,neuroticism:0,accountability:0};
-  const counts = {...scores};
-  PSYCH_QUESTIONS.forEach((q,i)=>{
-    if(psychAnswers[i] !== undefined){
-      scores[q.trait] = (scores[q.trait]||0) + psychAnswers[i];
-      counts[q.trait] = (counts[q.trait]||0) + 1;
+  // Aggregate all trait scores from answers
+  const scores = {
+    // MBTI
+    extraversion:0, introversion:0, sensing:0, intuition:0,
+    thinking:0, feeling:0, judging:0, perceiving:0,
+    // VARK
+    visual:0, auditory:0, readwrite:0, kinesthetic:0,
+    // RIASEC
+    realistic:0, investigative:0, artistic:0, social:0, enterprising:0, conventional:0,
+    // EQ
+    eq_awareness:0, eq_regulation:0, eq_social:0,
+    // Big 5
+    conscientiousness:0, openness:0, neuroticism:0, executionGap:0,
+    // Motivators
+    motivator_financial:0, motivator_independence:0, motivator_achievement:0, motivator_security:0
+  };
+
+  PSYCH_QUESTIONS.forEach((q, i) => {
+    const ans = psychAnswers[i];
+    if(ans === undefined || ans === null) return;
+
+    if(q.type === 'scenario' || q.type === 'quicktap'){
+      const opt = q.options[ans];
+      if(opt && opt.traits){
+        Object.entries(opt.traits).forEach(([trait, val]) => {
+          if(scores[trait] !== undefined) scores[trait] += val;
+        });
+      }
+    }
+    else if(q.type === 'rank'){
+      const selected = Array.isArray(ans) ? ans : [ans];
+      selected.forEach(optIdx => {
+        const opt = q.options[optIdx];
+        if(opt && opt.traits){
+          Object.entries(opt.traits).forEach(([trait, val]) => {
+            if(scores[trait] !== undefined) scores[trait] += val;
+          });
+        }
+      });
+    }
+    else if(q.type === 'slider'){
+      // Slider value 1-5, store directly
+      const val = ans;
+      if(q.traits){
+        Object.keys(q.traits).forEach(trait => {
+          if(scores[trait] !== undefined) scores[trait] = val;
+        });
+      }
     }
   });
-  Object.keys(scores).forEach(k=>{ if(counts[k]) scores[k] = Math.round((scores[k]/counts[k])*20); });
-  profile.traits = scores;
 
-  // Derive personality type from the most meaningful combination
-  const c = scores.conscientiousness||0;
-  const o = scores.openness||0;
-  const eg = scores.executionGap||0;
-  const n = scores.neuroticism||0;
+  // ── MBTI Type ──────────────────────────────────────────────
+  const mbtiE = scores.extraversion > scores.introversion ? 'E' : 'I';
+  const mbtiS = scores.sensing > scores.intuition ? 'S' : 'N';
+  const mbtiT = scores.thinking > scores.feeling ? 'T' : 'F';
+  const mbtiJ = scores.judging > scores.perceiving ? 'J' : 'P';
+  const mbtiType = mbtiE + mbtiS + mbtiT + mbtiJ;
+
+  const mbtiMap = {
+    'INTJ':'The Architect','INTP':'The Thinker','ENTJ':'The Commander','ENTP':'The Debater',
+    'INFJ':'The Advocate','INFP':'The Mediator','ENFJ':'The Protagonist','ENFP':'The Campaigner',
+    'ISTJ':'The Inspector','ISFJ':'The Protector','ESTJ':'The Executive','ESFJ':'The Consul',
+    'ISTP':'The Virtuoso','ISFP':'The Artist','ESTP':'The Entrepreneur','ESFP':'The Entertainer'
+  };
+
+  // ── VARK ───────────────────────────────────────────────────
+  const varkScores = {visual:scores.visual, auditory:scores.auditory, readwrite:scores.readwrite, kinesthetic:scores.kinesthetic};
+  const learnStyle = Object.keys(varkScores).reduce((a,b) => varkScores[a]>varkScores[b]?a:b);
+
+  // ── RIASEC ─────────────────────────────────────────────────
+  const riasecScores = {realistic:scores.realistic, investigative:scores.investigative, artistic:scores.artistic, social:scores.social, enterprising:scores.enterprising, conventional:scores.conventional};
+  const riasecSorted = Object.entries(riasecScores).sort((a,b)=>b[1]-a[1]);
+  const primaryInterest = riasecSorted[0][0];
+  const secondaryInterest = riasecSorted[1][0];
+
+  // ── EQ Profile ─────────────────────────────────────────────
+  const eqStrength = scores.eq_awareness >= 3 ? 'self-aware' : scores.eq_regulation >= 3 ? 'composed' : scores.eq_social >= 3 ? 'empathetic' : 'developing';
+
+  // ── Motivators ─────────────────────────────────────────────
+  const motivators = [];
+  if(scores.motivator_achievement >= 3) motivators.push('achievement');
+  if(scores.motivator_financial >= 4) motivators.push('financial');
+  if(scores.motivator_independence >= 4) motivators.push('independence');
+  if(scores.motivator_security <= 2) motivators.push('growth-seeking');
+  else motivators.push('stability');
+
+  // ── Personality Type (richer mapping) ─────────────────────
+  const c = scores.conscientiousness;
+  const o = scores.openness;
+  const eg = scores.executionGap;
+  const n = scores.neuroticism;
 
   const types = [
-    {name:"The Visionary",emoji:"",cond:()=>o>70&&eg>60,desc:"You think in possibilities and futures others can't see yet. Your biggest risk is staying in your head. Your mentor's job is to drag those visions into the real world, one step at a time."},
-    {name:"The Architect",emoji:"",cond:()=>c>70&&o>50,desc:"You build systems and think long-term. You're one of the rare people who can both dream and execute - but you sometimes over-engineer. Your mentor will push you to ship before it's perfect."},
-    {name:"The Achiever",emoji:"",cond:()=>c>70&&n<40,desc:"You set goals and hit them. You're resilient and driven. Your blind spot is burnout and not questioning whether you're chasing the right goals. Your mentor will ask the uncomfortable 'why'."},
-    {name:"The Explorer",emoji:"",cond:()=>o>70&&c<50,desc:"Endlessly curious, you absorb everything - but focus is your kryptonite. You've started more things than you've finished. Your mentor will help you pick one lane and go deep."},
-    {name:"The Overthinker",emoji:"",cond:()=>n>65&&eg>55,desc:"You see every angle, every risk, every way things could go wrong. That's a superpower - but it's been used against you. Your mentor will teach you that imperfect action beats perfect inaction every time."},
+    {name:"The Visionary", emoji:"🔭", cond:()=>o>=4&&eg>=4, desc:"You think in possibilities and futures others can't see yet. Your biggest risk is staying in your head. Your mentor's job: drag those visions into real action, one step at a time."},
+    {name:"The Architect", emoji:"🏗️", cond:()=>c>=4&&o>=3&&mbtiT==='T', desc:"You build systems and think long-term. You can both dream and execute — but you over-engineer. Your mentor will push you to ship before it's perfect."},
+    {name:"The Achiever",  emoji:"🏆", cond:()=>c>=4&&n<=2, desc:"You set goals and hit them. Resilient and driven. Your blind spot is burnout and chasing the wrong goals. Your mentor will ask the uncomfortable 'why'."},
+    {name:"The Explorer",  emoji:"🧭", cond:()=>o>=4&&c<=2, desc:"Endlessly curious — you absorb everything. But focus is your kryptonite. Your mentor will help you pick one lane and go deep."},
+    {name:"The Connector", emoji:"🤝", cond:()=>scores.social>=4&&scores.feeling>=3, desc:"You thrive when helping others grow. Your empathy is your superpower — but you sometimes neglect your own ambitions. Your mentor will help you lead without losing yourself."},
+    {name:"The Overthinker",emoji:"🌀", cond:()=>n>=4&&eg>=3, desc:"You see every angle and every risk. That's a superpower used against you. Your mentor will teach you: imperfect action beats perfect inaction every time."},
+    {name:"The Creator",   emoji:"🎨", cond:()=>scores.artistic>=4&&o>=3, desc:"You see the world differently and need to express it. Structure feels like a cage. Your mentor will build creative systems that let your originality thrive."},
+    {name:"The Strategist",emoji:"♟️", cond:()=>scores.enterprising>=4&&mbtiT==='T', desc:"You think in moves and outcomes. You're built for leadership — but you can be too transactional. Your mentor will help you build depth alongside your strategy."},
   ];
 
-  const matched = types.find(t=>t.cond()) || {name:"The Grower",emoji:"",desc:"You're self-aware, motivated, and genuinely ready to level up. You don't fit a single mold - which means your potential is genuinely open. Your mentor will help you chart your own path."};
-  profile.personalityType = matched.name;
-  profile.personalityEmoji = matched.emoji;
-  profile.personalityDesc = matched.desc;
-  // profile already updated above - full save happens at saveKeysAndStart
+  const matched = types.find(t=>t.cond()) || {
+    name:"The Grower", emoji:"🌱",
+    desc:"Self-aware, motivated, and genuinely ready to level up. You don't fit a single mold — which means your potential is wide open. Your mentor will help you chart your own path."
+  };
 
-  // Render result
+  // Save full psychometric profile
+  profile.personalityType  = matched.name;
+  profile.personalityEmoji = matched.emoji;
+  profile.personalityDesc  = matched.desc;
+  profile.mbtiType         = mbtiType;
+  profile.learnStyle       = learnStyle;
+  profile.primaryInterest  = primaryInterest;
+  profile.secondaryInterest = secondaryInterest;
+  profile.eqStrength       = eqStrength;
+  profile.motivators       = motivators;
+  profile.traits           = scores;
+
+  // Render result screen (no personality type shown to user — just traits)
   document.getElementById('result-emoji').textContent = matched.emoji;
   document.getElementById('result-type').innerHTML = `You are <span class="highlight">${matched.name}</span>`;
   document.getElementById('result-desc').textContent = matched.desc;
 
-  const traitLabels = {conscientiousness:'Discipline',openness:'Curiosity',kinesthetic:'Hands-on Learning',earlyRiser:'Morning Energy',executionGap:'Big Thinker Gap',auditory:'Auditory Learning',introversion:'Introversion',neuroticism:'Overthinking',accountability:'Needs Accountability'};
-  const traitColors = ['#e8c87a','#5ba4cf','#7dd3a8','#a78bfa','#e0a870','#e87a9a','#7adde8','#e07070','#b0cf5b'];
-  const entries = Object.entries(scores);
-  document.getElementById('traits-grid').innerHTML = entries.map(([k,v],i)=>`
+  const traitLabels = {
+    visual:'Visual Learning', auditory:'Auditory Learning', kinesthetic:'Hands-on', readwrite:'Reading/Writing',
+    conscientiousness:'Discipline', openness:'Curiosity', neuroticism:'Overthinking', executionGap:'Vision vs Action',
+    extraversion:'Energy from Others', introversion:'Inner Focus', eq_awareness:'Self-Awareness', eq_regulation:'Composure'
+  };
+  const traitColors = ['#e8c87a','#5ba4cf','#7dd3a8','#a78bfa','#e0a870','#e87a9a','#7adde8','#e07070'];
+  const displayTraits = ['visual','auditory','kinesthetic','conscientiousness','openness','neuroticism','eq_awareness','eq_regulation'];
+  document.getElementById('traits-grid').innerHTML = displayTraits.map((k,i) => `
     <div class="trait-item">
       <div class="trait-label">${traitLabels[k]||k}</div>
-      <div class="trait-bar-wrap"><div class="trait-bar" style="width:${v}%;background:${traitColors[i%traitColors.length]}"></div></div>
-      <div class="trait-value" style="color:${traitColors[i%traitColors.length]}">${v}%</div>
+      <div class="trait-bar-wrap"><div class="trait-bar" style="width:${Math.min(100,scores[k]*10)}%;background:${traitColors[i%traitColors.length]}"></div></div>
+      <div class="trait-value" style="color:${traitColors[i%traitColors.length]}">${scores[k] > 0 ? Math.min(100,scores[k]*10)+'%' : 'Building...'}</div>
     </div>`).join('');
 }
 
