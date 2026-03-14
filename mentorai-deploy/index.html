@@ -823,10 +823,11 @@ async function loadUserProfile(){
     profile.keys = { claude:'server', openai:'server', gemini:'server' };
 
     // Load chat messages from Supabase
+    // Load latest 50 messages (descending), then reverse for correct display order
     const { data: msgs } = await sb.from('chat_messages')
       .select('*').eq('user_id', currentUser.id)
-      .order('created_at', { ascending: true }).limit(50);
-    messages = (msgs || []).map(m => ({ role: m.role, content: m.content, model: m.model, reason: m.reason }));
+      .order('created_at', { ascending: false }).limit(50);
+    messages = (msgs || []).reverse().map(m => ({ role: m.role, content: m.content, model: m.model, reason: m.reason }));
 
     // Save to localStorage only - do NOT write back to Supabase
     // (we just loaded from Supabase - writing back would overwrite with partial data)
@@ -1339,8 +1340,14 @@ function launchApp(){
   if(messages.length===0){ 
     showWelcomeMessage(); 
     logToSheet('session_start'); 
-  } else { 
-    showDailyCheckin(); 
+  } else {
+    // Only show daily check-in if user was away since yesterday or longer
+    const today = new Date().toDateString();
+    const lastVisitDate = profile.lastVisit || '';
+    const wasAwayYesterday = lastVisitDate !== today;
+    if(wasAwayYesterday){
+      showDailyCheckin();
+    }
     logToSheet('returning_user'); 
   }
 }
