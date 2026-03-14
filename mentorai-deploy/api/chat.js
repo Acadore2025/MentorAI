@@ -1,2120 +1,2579 @@
-// ============================================================
-// api/chat.js - MentorAI Brain
-// ============================================================
-// Flow:
-// 1. Read student profile (learning style, emotion, level)
-// 2. Detect what student needs (teach / flashcard / practice)
-// 3. Search Pinecone for right content in their style
-// 4. Build teaching prompt combining profile + content
-// 5. AI teaches in the student's OWN way
-// ============================================================
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>MentorAI - Your Growth Companion</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 
-export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
-
-  try {
-    const body = req.body;
-    let messages         = body.messages || [];
-    const studentProfile = body.profile  || {};
-    const baseSystem     = body.system   || '';
-    const model          = body.model    || 'openai';
-    const userId         = body.user_id  || null;
-    const userEmail      = body.user_email || studentProfile.email || null;
-    const quizState      = body.quiz_state || null; // tracks current quiz progress
-
-    const userMessage = messages[messages.length - 1]?.content || '';
-
-    // Step 1: Who is this student?
-    const student = extractStudentContext(studentProfile);
-
-    // Step 2: Agent routes the message intelligently
-    const intent = detectIntent(userMessage, student, messages);
-
-    // Step 2b: Auto-detect emotion from message
-    const emotionData = detectEmotionFromMessage(userMessage, messages.slice(-4));
-    if (emotionData.detected) {
-      console.log('? Emotion detected:', emotionData.emotion, '| confidence:', emotionData.confidence + '%');
-      // Override profile emotion with detected emotion if confidence is high enough
-      if (emotionData.confidence >= 40) {
-        student.emotion = emotionData.emotion;
-        student.emotionAdjustments = emotionData.adjustments;
-      }
-    }
-
-    // Step 3: Search knowledge base if teaching needed
-    let ragContext = '';
-    let ragNoContent = false;
-    if (intent.needsKnowledge) {
-
-      // Pass mode + recentHistory so RAG can:
-      // - rewrite vague queries ("explain it again") into clean search terms
-      // - use dynamic top_k suited to the student's emotional state/mode
-      // - filter by subject if detected
-      const ragResult = await searchKnowledge(
-        userMessage,
-        student.learning_style,
-        intent.subject,
-        intent.content_type,
-        intent.mode,
-        messages.slice(-4)
-      );
-      ragContext   = ragResult.context;
-      ragNoContent = ragResult.noRelevantContent;
-
-      // Hallucination guard: log when AI will answer with no RAG backing
-      if (ragNoContent) {
-        console.warn('[HALLUCINATION_GUARD] No relevant content found in knowledge base — AI will use general knowledge for:', userMessage.slice(0, 100));
-      }
-    }
-
-    // Step 3b: Web search if current affairs / news needed
-    let webContext = '';
-    console.log('[SEARCH] needsWebSearch:', intent.needsWebSearch, '| message:', userMessage);
-    if (intent.needsWebSearch) {
-      console.log('[WEB] Calling Tavily for:', userMessage);
-      webContext = await searchWeb(userMessage);
-      console.log('[OK] Tavily returned:', webContext ? webContext.slice(0, 200) : 'EMPTY');
-
-      if (webContext) {
-        const needsLiveDisclaimer = /live|score|right now|this minute|real.?time|breaking|stock price|share price|crypto/i.test(userMessage);
-        if (needsLiveDisclaimer) {
-          webContext += `
-
-IMPORTANT: End your response with exactly this line on its own:
-"Note: This is based on the latest available information. For live updates check Cricinfo / NSE / Google News directly."`;
-        } else {
-          webContext += `
-
-IMPORTANT: End your response with exactly this line on its own:
-"Note: Based on latest available information. Verify from primary sources for critical decisions."`;
-        }
-      }
-    }
-
-    // Step 4b: Socratic intake - figure out next question BEFORE building prompt
-    let socraticInstruction = '';
-    if (intent.mode === 'socratic_intake') {
-      const recentExchange = messages.slice(-8).map(m => m.content || '').join(' ').toLowerCase();
-
-      const isStudyPlan = recentExchange.match(/study plan|make a plan|create a plan|help me prepare|how should i prepare|prepare for/i);
-      const isInterview = recentExchange.match(/interview/i);
-
-      const knowsCompany  = recentExchange.match(/accenture|genpact|google|amazon|flipkart|tcs|infosys|wipro|microsoft|meta|deloitte|capgemini|cognizant|hcl|startup|mnc/i);
-      const knowsLevel    = recentExchange.match(/beginner|intermediate|senior|years of exp|i know|i dont know|nothing|basics|comfortable|solid|decent|some exp/i);
-      const knowsTime     = recentExchange.match(/\d+\s*(hour|hr|hrs)|hour a day|hours a day|per day|daily|tonight|all day/i);
-      const knowsHours    = recentExchange.match(/\d+\s*(hour|hr|hrs)|hour a day|hours a day|per day|daily/i);
-      const knowsDeadline = recentExchange.match(/\d+\s*(day|week|month|year)|jee|neet|upsc|cat|gate|exam date|deadline/i);
-      const knowsWeak     = recentExchange.match(/weak|struggle|bad at|not good|difficult|hard for me|confused about/i);
-
-      if (isStudyPlan) {
-        if (!knowsHours)    socraticInstruction = 'how many hours a day can you realistically give?';
-        else if (!knowsDeadline) socraticInstruction = 'what is your target date or deadline?';
-        else if (!knowsWeak)     socraticInstruction = 'which subjects or topics feel weakest right now?';
-        else                     socraticInstruction = 'DONE_DIAGNOSING';
-      } else if (isInterview) {
-        if (!knowsCompany)  socraticInstruction = 'which company is it for?';
-        else if (!knowsLevel)    socraticInstruction = 'how comfortable are you with the relevant skills - beginner, some experience, or fairly solid?';
-        else if (!knowsTime)     socraticInstruction = 'how many hours do you have to prepare?';
-        else                     socraticInstruction = 'DONE_DIAGNOSING';
-      } else {
-        if (!knowsLevel)    socraticInstruction = 'what is your current level with this?';
-        else if (!knowsTime)     socraticInstruction = 'how much time do you have?';
-        else                     socraticInstruction = 'DONE_DIAGNOSING';
-      }
-
-      // If done diagnosing - switch to normal teaching mode
-      if (socraticInstruction === 'DONE_DIAGNOSING') {
-        intent.mode = 'teaching';
-        socraticInstruction = '';
-      }
-    }
-
-    // Step 4: Build the full teaching prompt (now with socraticInstruction available)
-    intent._socraticInstruction = socraticInstruction;
-
-    // ── Quiz Interceptor ──────────────────────────────────────
-    // If user asks for N questions, intercept and enforce ONE at a time
-    const quizMatch = userMessage.match(/quiz.*?(\d+)\s*question/i) ||
-                      userMessage.match(/(\d+)\s*question.*quiz/i) ||
-                      userMessage.match(/give.*?(\d+)\s*question/i);
-    if (quizMatch && intent.mode === 'practice') {
-      const totalQ = parseInt(quizMatch[1]);
-      const currentQ = quizState ? quizState.current : 1;
-      intent._quizInstruction = `
-You are in a quiz session. Total questions: ${totalQ}. Current question: ${currentQ} of ${totalQ}.
-GIVE ONLY QUESTION ${currentQ}. ONE QUESTION ONLY.
-Format: "Question ${currentQ} of ${totalQ} — [Topic]\n[Question]\n\nWhat is your answer?"
-DO NOT give question ${currentQ + 1} or any other question.
-DO NOT reveal the answer.
-STOP after the question.`;
-    }
-    // -- SOLID TIME COMPASS - injected on every request ----------
-    const _now        = new Date();
-    const _year       = _now.getFullYear();
-    const _month      = _now.toLocaleString('en-US', { month: 'long' });
-    const _date       = _now.getDate();
-    const _weekday    = _now.toLocaleString('en-US', { weekday: 'long' });
-    const _yesterday  = new Date(_now); _yesterday.setDate(_date - 1);
-    const _lastWeek   = new Date(_now); _lastWeek.setDate(_date - 7);
-    const _lastMonth  = new Date(_now); _lastMonth.setMonth(_now.getMonth() - 1);
-    const _lastYear   = _year - 1;
-
-    const timeCompass = `
-========================================
-INTERNAL TIME COMPASS - READ BEFORE EVERY RESPONSE
-========================================
-Current date    : ${_weekday}, ${_month} ${_date}, ${_year}
-Yesterday       : ${_yesterday.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' })}
-Last week       : week of ${_lastWeek.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })}
-Last month      : ${_lastMonth.toLocaleString('en-US', { month:'long', year:'numeric' })}
-Last year       : ${_lastYear}
-Current year    : ${_year}
-
-TIME RULES - NON-NEGOTIABLE:
-1. "Today" = ${_weekday}, ${_month} ${_date}, ${_year}. Not 2024. Not 2025. This exact date.
-2. "Yesterday" = ${_yesterday.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })}
-3. "This year" = ${_year}. "Last year" = ${_lastYear}.
-4. "Latest" or "recent" = must be from ${_year}, not older.
-5. If web search results mention a different year - IGNORE those results. Only use ${_year} data.
-6. If no ${_year} data exists in search results - say "I could not find confirmed ${_year} data" - never substitute old data.
-7. NEVER present a past event as current. NEVER guess. If unsure - say so.
-8. Sports results, news, prices, elections, rankings - ALL must be verified against ${_year}.
-========================================`;
-
-    const baseSystemWithDate = `${timeCompass}\n\n${baseSystem}`;
-    const systemPrompt = buildTeachingPrompt(baseSystemWithDate, student, ragContext, intent, webContext, ragNoContent);
-
-    // Step 5: Inject web context directly into messages if available
-    let finalMessages = messages;
-    if (webContext) {
-      const lastUserMsg = finalMessages[finalMessages.length - 1];
-      finalMessages = [
-        ...finalMessages.slice(0, -1),
-        {
-          role: 'user',
-          content: `IMPORTANT INSTRUCTIONS:
-- You have NO independent knowledge of current events, news, or anything after 2023.
-- The ONLY source of truth for current information is the web search data below.
-- You MUST use this data to answer. Do NOT fall back to your training data.
-- If the web search data answers the question - use it directly and cite it.
-
-[LIVE WEB SEARCH DATA]:
-${webContext}
-
-[USER QUESTION]: ${lastUserMsg.content}`
-        }
-      ];
-    }
-
-    // Step 6: Smart model routing + rate limiting
-    const _responseStart = Date.now();
-
-    // Check how many premium messages used today
-    const premiumUsedToday = await countPremiumMessagesToday(
-      body.user_id || null,
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY
-    );
-    const DAILY_PREMIUM_LIMIT = 20;
-    const premiumAllowed = premiumUsedToday < DAILY_PREMIUM_LIMIT;
-
-    // Route to best model based on message + context
-    const routing = selectBestModel(userMessage, intent, emotionData, webContext, premiumAllowed);
-    const smartModel = routing.model;
-    const isPremium  = routing.isPremium;
-
-    console.log(`[ROUTING] model=${smartModel} | premium=${isPremium} | used=${premiumUsedToday}/${DAILY_PREMIUM_LIMIT} | reason=${routing.reason}`);
-
-    const response = await callAI(smartModel, finalMessages, systemPrompt);
-    const _responseTimeMs = Date.now() - _responseStart;
-
-    // Detect issues for prompt analysis — saved to chat_messages.issue column
-    const issues = [];
-    if (ragNoContent)                              issues.push('No RAG content');
-    if (!ragNoContent && !ragContext)              issues.push('No RAG content');
-    if ((response.content || '').length < 100)    issues.push('Short AI response');
-    const confusedSignals = ['again','dont understand',"don't understand",'explain again','still confused','not clear'];
-    if (confusedSignals.some(k => userMessage.toLowerCase().includes(k))) issues.push('Student confused');
-    const negativeEmotions = ['panicked','frustrated','anxious','stressed'];
-    if (negativeEmotions.includes(emotionData.emotion)) issues.push(`Negative emotion: ${emotionData.emotion}`);
-
-    // ── Daily Pattern Recognition ────────────────────────────
-    const psychDiscovery = detectPsychInsight(userMessage, messages.slice(-6), emotionData);
-
-    // Calculate cost
-    const MODEL_PRICING = {
-      'gpt-4o':                   { input: 2.50,   output: 10.00  },
-      'gpt-4o-mini':              { input: 0.15,   output: 0.60   },
-      'claude-sonnet-4-6':        { input: 3.00,   output: 15.00  },
-      'claude-3-5-haiku-20241022':{ input: 0.80,   output: 4.00   },
-      'gemini-1.5-flash':         { input: 0.075,  output: 0.30   },
-      'llama-3.3-70b-versatile':  { input: 0.05,   output: 0.10   },
-      'deepseek-chat':            { input: 0.014,  output: 0.028  }
-    };
-    const usage    = response.usage || {};
-    const pricing  = MODEL_PRICING[smartModel] || MODEL_PRICING['gpt-4o'];
-    const promptTokens     = usage.prompt_tokens     || usage.input_tokens  || 0;
-    const completionTokens = usage.completion_tokens || usage.output_tokens || 0;
-    const totalTokens      = usage.total_tokens || (promptTokens + completionTokens);
-    const costUSD = (
-      (promptTokens     / 1_000_000) * pricing.input +
-      (completionTokens / 1_000_000) * pricing.output
-    );
-
-    // Add metadata for frontend to save to Supabase
-    response.meta = {
-      emotion:           emotionData.detected ? emotionData.emotion : student.emotion || 'neutral',
-      rag_hit:           !ragNoContent && !!ragContext,
-      rag_score:         null,
-      mode:              intent.mode    || 'teaching',
-      subject:           intent.subject || null,
-      issue:             issues.length > 0 ? issues.join(' | ') : null,
-      psych_insight:     psychDiscovery.insight || null,
-      psych_key:         psychDiscovery.key     || null,
-      // Model routing
-      rating:            0,
-      session_id:        null,
-      response_time_ms:  _responseTimeMs,
-      model_used:        smartModel,
-      is_premium:        isPremium,
-      routing_reason:    routing.reason,
-      premium_used_today: premiumUsedToday,
-      web_search_used:   !!webContext,
-      rag_score_actual:  null,
-      tokens_prompt:     promptTokens     || null,
-      tokens_completion: completionTokens || null,
-      tokens_total:      totalTokens      || null,
-      cost_usd:          parseFloat(costUSD.toFixed(6)) || null
-    };
-
-    // ── Proactive Mentor System ──────────────────────────────
-    // Detect trigger SYNCHRONOUSLY (fast — no API calls)
-    // Then return response immediately and trigger email in background
-    const proactiveTrigger = detectProactiveTrigger(userMessage, messages, response.meta);
-    if (proactiveTrigger && userId && userEmail) {
-      response.meta.proactive_action = 'schedule_created';
-      response.meta.proactive_goal   = proactiveTrigger.goal;
-      response.meta.proactive_topic  = proactiveTrigger.topic;
-    }
-
-    // Return response to user IMMEDIATELY — no waiting
-    res.status(200).json(response);
-
-    // AFTER response sent — trigger emails in background (non-blocking)
-    if (proactiveTrigger && userId && userEmail) {
-      triggerProactiveMentor({
-        userId,
-        userEmail,
-        userName:      student.name,
-        learningStyle: student.learning_style,
-        personality:   student.personality,
-        trigger:       proactiveTrigger,
-        supabaseUrl:   process.env.SUPABASE_URL,
-        supabaseKey:   process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY,
-        baseUrl:       'https://mentor-ai-swart.vercel.app'
-      }).catch(e => console.warn('[PROACTIVE] Background error:', e.message));
-    }
-
-  } catch (err) {
-    console.error('Chat error:', err);
-    return res.status(500).json({ error: err.message });
-  }
+:root{
+  --bg:#080a0f;
+  --surface:#0f1219;
+  --surface2:#161b25;
+  --surface3:#1d2333;
+  --border:rgba(255,255,255,0.06);
+  --border2:rgba(255,255,255,0.1);
+  --text:#ede9e0;
+  --muted:#6b7280;
+  --muted2:#4b5563;
+  --accent:#e8c87a;
+  --accent2:#5ba4cf;
+  --accent3:#7dd3a8;
+  --danger:#e07070;
+  --coach:#e8825a;
+  --strategist:#5ba4cf;
+  --friend:#7dd3a8;
+  --sage:#a78bfa;
+  --r:14px;
 }
 
-// -------------------------------------------------------------
-// WHO IS THIS STUDENT
-// -------------------------------------------------------------
-function extractStudentContext(profile) {
-  const personalityToStyle = {
-    'The Explorer':    'hands_on',
-    'The Achiever':    'logical',
-    'The Connector':   'story',
-    'The Overthinker': 'logical',
-    'The Grower':      'visual',
-    'The Dreamer':     'story',
-    'The Analyst':     'logical',
-    'The Creator':     'visual'
-  };
+body{font-family:'Outfit',sans-serif;background:var(--bg);color:var(--text);height:100dvh;display:flex;flex-direction:column;overflow:hidden;cursor:default}
 
-  return {
-    name:              profile.name             || 'Student',
-    learning_style:    (function() {
-      const raw = profile.learning_style || profile.learn_style || '';
-      const map = {
-        'visual':'visual','diagram':'visual','chart':'visual',
-        'hands_on':'hands_on','hands-on':'hands_on','doing':'hands_on','project':'hands_on','building':'hands_on','practical':'hands_on',
-        'story':'story','narrative':'story','example':'story',
-        'logical':'logical','analytical':'logical','data':'logical'
-      };
-      const key = Object.keys(map).find(k => raw.toLowerCase().includes(k));
-      return key ? map[key] : (personalityToStyle[profile.personality_type] || 'visual');
-    })(),
-    personality:       profile.personality_type || 'The Grower',
-    personality_desc:  profile.personality_desc || '',
-    persona:           profile.persona          || 'friend',
-    mbti_type:         profile.mbti_type        || null,
-    primary_interest:  profile.primary_interest || null,
-    eq_strength:       profile.eq_strength      || null,
-    motivators:        profile.motivators       || [],
-    traits:            profile.traits           || {},
-    level:             profile.academic_level   || 'Student',
-    exam_target:       profile.exam_target      || profile.goal || 'their goal',
-    timeline:          profile.timeline         || null,
-    emotion:           profile.current_emotion  || 'neutral',
-    weak_subjects:     profile.weak_subjects    || [],
-    strong_subjects:   profile.strong_subjects  || [],
-    memory:            profile.memory           || null
-  };
+body::before{content:'';position:fixed;inset:0;background:
+  radial-gradient(ellipse 70% 50% at 15% 0%,rgba(232,200,122,0.06) 0%,transparent 55%),
+  radial-gradient(ellipse 50% 40% at 85% 100%,rgba(91,164,207,0.05) 0%,transparent 55%),
+  radial-gradient(ellipse 30% 30% at 50% 50%,rgba(125,211,168,0.03) 0%,transparent 50%);
+pointer-events:none;z-index:0}
+
+/* -- SCREENS -- */
+.screen{position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg);overflow-y:auto;padding:24px 20px}
+.screen.hidden{display:none}
+
+/* -- WELCOME SCREEN -- */
+#screen-welcome .logo-big{font-family:'Cormorant Garamond',serif;font-size:clamp(48px,10vw,88px);font-weight:700;line-height:1;text-align:center;margin-bottom:12px}
+#screen-welcome .logo-big span{color:var(--accent)}
+#screen-welcome .tagline{font-size:clamp(14px,2.5vw,18px);color:var(--muted);text-align:center;font-weight:300;max-width:420px;line-height:1.7;margin-bottom:48px}
+.btn-primary{background:linear-gradient(135deg,var(--accent),#d4a850);color:#080a0f;border:none;border-radius:12px;padding:14px 36px;font-size:16px;font-weight:600;cursor:pointer;font-family:'Outfit',sans-serif;transition:all 0.2s;letter-spacing:0.2px}
+.btn-primary:hover{opacity:0.88;transform:translateY(-2px);box-shadow:0 8px 24px rgba(232,200,122,0.25)}
+.btn-ghost{background:transparent;border:1px solid var(--border2);color:var(--muted);border-radius:12px;padding:12px 28px;font-size:14px;cursor:pointer;font-family:'Outfit',sans-serif;transition:all 0.2s}
+.btn-ghost:hover{border-color:var(--accent);color:var(--accent)}
+.floating-tags{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:500px;margin-bottom:48px}
+.ftag{font-size:12px;padding:5px 14px;border-radius:20px;border:1px solid var(--border);color:var(--muted);background:var(--surface)}
+
+/* -- ONBOARDING -- */
+#screen-onboard{background:var(--bg)}
+.onboard-card{background:var(--surface);border:1px solid var(--border);border-radius:24px;padding:clamp(28px,5vw,48px);max-width:560px;width:100%;animation:fadeUp 0.4s ease both}
+.step-indicator{display:flex;gap:6px;margin-bottom:32px;justify-content:center}
+.step-dot{width:8px;height:8px;border-radius:50%;background:var(--surface3);transition:all 0.3s}
+.step-dot.active{background:var(--accent);width:24px;border-radius:4px}
+.step-dot.done{background:var(--accent3)}
+.onboard-q{font-family:'Cormorant Garamond',serif;font-size:clamp(22px,4vw,30px);font-weight:600;margin-bottom:8px;line-height:1.3}
+.onboard-sub{font-size:14px;color:var(--muted);margin-bottom:28px;font-weight:300;line-height:1.6}
+.onboard-input{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:13px 16px;color:var(--text);font-family:'Outfit',sans-serif;font-size:15px;outline:none;transition:border-color 0.2s;margin-bottom:8px}
+.onboard-input:focus{border-color:var(--accent)}
+.onboard-input::placeholder{color:var(--muted2)}
+.choice-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:24px}
+.choice-btn{background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:14px 16px;color:var(--text);cursor:pointer;font-family:'Outfit',sans-serif;font-size:13.5px;text-align:left;transition:all 0.2s;line-height:1.4}
+.choice-btn:hover,.choice-btn.selected{border-color:var(--accent);background:rgba(232,200,122,0.08);color:var(--accent)}
+.choice-btn .choice-icon{font-size:20px;margin-bottom:6px;display:block}
+.onboard-nav{display:flex;justify-content:space-between;align-items:center;margin-top:24px}
+.btn-back{background:transparent;border:none;color:var(--muted);cursor:pointer;font-family:'Outfit',sans-serif;font-size:14px;padding:8px 0}
+.btn-back:hover{color:var(--text)}
+.btn-next{background:var(--accent);color:#080a0f;border:none;border-radius:10px;padding:12px 28px;font-size:14px;font-weight:600;cursor:pointer;font-family:'Outfit',sans-serif;transition:all 0.2s}
+.btn-next:hover{opacity:0.88;transform:translateY(-1px)}
+.btn-next:disabled{opacity:0.35;cursor:not-allowed;transform:none}
+
+/* -- PSYCHOMETRIC -- */
+.psych-q{font-size:15px;color:var(--text);margin-bottom:16px;font-weight:400;line-height:1.6}
+.scale-labels{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:8px}
+.scale-btns{display:flex;gap:8px;margin-bottom:20px}
+.scale-btn{flex:1;height:42px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--muted);cursor:pointer;font-family:'Outfit',sans-serif;font-size:14px;font-weight:500;transition:all 0.2s}
+.scale-btn:hover{border-color:var(--accent);color:var(--accent)}
+.scale-btn.selected{background:var(--accent);border-color:var(--accent);color:#080a0f;font-weight:600}
+.psych-progress{height:3px;background:var(--surface3);border-radius:2px;margin-bottom:28px;overflow:hidden}
+.psych-progress-bar{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;transition:width 0.4s ease}
+
+/* -- PERSONALITY RESULT -- */
+#screen-result{background:var(--bg)}
+.result-card{background:var(--surface);border:1px solid var(--border);border-radius:24px;padding:clamp(28px,5vw,48px);max-width:580px;width:100%;text-align:center;animation:fadeUp 0.5s ease both}
+.result-type{font-family:'Cormorant Garamond',serif;font-size:clamp(32px,6vw,52px);font-weight:700;margin-bottom:8px;line-height:1.1}
+.result-type .highlight{color:var(--accent)}
+.result-desc{font-size:14px;color:var(--muted);line-height:1.7;margin-bottom:32px;font-weight:300}
+.traits-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:32px;text-align:left}
+.trait-item{background:var(--surface2);border-radius:12px;padding:14px 16px}
+.trait-label{font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px}
+.trait-bar-wrap{height:4px;background:var(--surface3);border-radius:2px;overflow:hidden}
+.trait-bar{height:100%;border-radius:2px;transition:width 0.8s ease}
+.trait-value{font-size:13px;font-weight:500;margin-top:4px}
+
+/* -- PERSONA SELECTOR -- */
+#screen-persona{background:var(--bg)}
+.persona-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;max-width:560px;width:100%;margin-bottom:28px}
+.persona-card{background:var(--surface);border:2px solid var(--border);border-radius:18px;padding:20px;cursor:pointer;transition:all 0.25s;text-align:left}
+.persona-card:hover{transform:translateY(-3px)}
+.persona-card.selected{transform:translateY(-3px)}
+.persona-card[data-p="coach"]:hover,.persona-card[data-p="coach"].selected{border-color:var(--coach);background:rgba(232,130,90,0.06)}
+.persona-card[data-p="strategist"]:hover,.persona-card[data-p="strategist"].selected{border-color:var(--strategist);background:rgba(91,164,207,0.06)}
+.persona-card[data-p="friend"]:hover,.persona-card[data-p="friend"].selected{border-color:var(--friend);background:rgba(125,211,168,0.06)}
+.persona-card[data-p="sage"]:hover,.persona-card[data-p="sage"].selected{border-color:var(--sage);background:rgba(167,139,250,0.06)}
+.persona-emoji{font-size:28px;margin-bottom:10px}
+.persona-name{font-size:16px;font-weight:600;margin-bottom:4px}
+.persona-card[data-p="coach"] .persona-name{color:var(--coach)}
+.persona-card[data-p="strategist"] .persona-name{color:var(--strategist)}
+.persona-card[data-p="friend"] .persona-name{color:var(--friend)}
+.persona-card[data-p="sage"] .persona-name{color:var(--sage)}
+.persona-desc{font-size:12.5px;color:var(--muted);line-height:1.5;font-weight:300}
+
+/* -- API KEYS SCREEN -- */
+#screen-keys{background:var(--bg)}
+.keys-card{background:var(--surface);border:1px solid var(--border);border-radius:24px;padding:clamp(24px,4vw,40px);max-width:520px;width:100%}
+.keys-title{font-family:'Cormorant Garamond',serif;font-size:28px;font-weight:600;margin-bottom:6px}
+.keys-sub{font-size:13.5px;color:var(--muted);margin-bottom:28px;line-height:1.6;font-weight:300}
+.key-row{margin-bottom:14px}
+.key-row label{font-size:12px;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:7px}
+.key-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.key-row input{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:11px 14px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13px;outline:none;transition:border-color 0.2s}
+.key-row input:focus{border-color:var(--accent)}
+.key-row input::placeholder{color:var(--muted2)}
+.key-note{font-size:12px;color:var(--muted2);line-height:1.6;margin-bottom:20px}
+
+/* -- MAIN APP -- */
+#screen-app{position:relative;display:flex;flex-direction:column;height:100dvh;z-index:1}
+#screen-app.hidden{display:none}
+
+/* Header */
+.app-header{position:relative;z-index:10;display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--border);background:rgba(8,10,15,0.92);backdrop-filter:blur(14px);flex-wrap:wrap;gap:8px}
+.app-logo{font-family:'Cormorant Garamond',serif;font-size:20px;font-weight:700}
+.app-logo span{color:var(--accent)}
+.user-info{display:flex;align-items:center;gap:10px}
+.user-avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;color:#080a0f}
+.user-name-small{font-size:13px;font-weight:500}
+.user-level{font-size:11px;color:var(--accent);background:rgba(232,200,122,0.1);border:1px solid rgba(232,200,122,0.2);padding:2px 8px;border-radius:10px}
+.header-actions{display:flex;gap:8px;align-items:center}
+.icon-btn{background:transparent;border:1px solid var(--border);border-radius:8px;padding:6px 10px;cursor:pointer;font-size:14px;color:var(--muted);transition:all 0.2s;font-family:'Outfit',sans-serif}
+.icon-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+/* XP Bar */
+.xp-bar-wrap{position:relative;z-index:9;background:rgba(8,10,15,0.8);padding:6px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+.xp-label{font-size:11px;color:var(--muted);white-space:nowrap}
+.xp-bar{flex:1;height:4px;background:var(--surface3);border-radius:2px;overflow:hidden;max-width:200px}
+.xp-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;transition:width 0.6s ease}
+.streak-badge{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--coach);background:rgba(232,130,90,0.1);border:1px solid rgba(232,130,90,0.2);padding:3px 10px;border-radius:20px}
+
+/* Persona indicator */
+.persona-indicator{font-size:11px;padding:3px 10px;border-radius:20px;border:1px solid;font-weight:500}
+.persona-indicator.coach{border-color:rgba(232,130,90,0.4);color:var(--coach);background:rgba(232,130,90,0.06)}
+.persona-indicator.strategist{border-color:rgba(91,164,207,0.4);color:var(--strategist);background:rgba(91,164,207,0.06)}
+.persona-indicator.friend{border-color:rgba(125,211,168,0.4);color:var(--friend);background:rgba(125,211,168,0.06)}
+.persona-indicator.sage{border-color:rgba(167,139,250,0.4);color:var(--sage);background:rgba(167,139,250,0.06)}
+
+/* Chat */
+#chat-container{flex:1;overflow-y:auto;padding:24px 20px;position:relative;z-index:1;scroll-behavior:smooth}
+#chat-container::-webkit-scrollbar{width:3px}
+#chat-container::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.messages-wrap{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
+
+/* Daily checkin */
+.checkin-card{background:linear-gradient(135deg,rgba(232,200,122,0.08),rgba(91,164,207,0.06));border:1px solid rgba(232,200,122,0.15);border-radius:16px;padding:18px 20px;animation:fadeUp 0.4s ease both}
+.checkin-title{font-size:13px;font-weight:600;color:var(--accent);margin-bottom:6px}
+.checkin-text{font-size:14px;color:var(--text);line-height:1.6;margin-bottom:14px;font-weight:300}
+.checkin-btns{display:flex;gap:8px;flex-wrap:wrap}
+.checkin-btn{font-size:12.5px;padding:7px 14px;border-radius:20px;border:1px solid var(--border);background:var(--surface2);color:var(--text);cursor:pointer;font-family:'Outfit',sans-serif;transition:all 0.2s}
+.checkin-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+/* Messages */
+.message{display:flex;gap:12px;animation:fadeUp 0.3s ease both}
+.message.user{flex-direction:row-reverse}
+.msg-avatar{width:32px;height:32px;border-radius:10px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:14px;margin-top:2px}
+.msg-avatar.ai-av{background:linear-gradient(135deg,var(--accent),var(--accent2))}
+.msg-avatar.user-av{background:var(--surface2);border:1px solid var(--border);font-size:12px;font-weight:600;color:var(--muted)}
+.msg-wrap{display:flex;flex-direction:column;gap:5px;max-width:78%}
+.message.user .msg-wrap{align-items:flex-end}
+.bubble{padding:13px 16px;border-radius:14px;font-size:14.5px;line-height:1.8;font-weight:300}
+.message.ai .bubble{background:var(--surface);border:1px solid var(--border);border-top-left-radius:4px}
+.message.user .bubble{background:var(--surface2);border:1px solid rgba(91,164,207,0.1);border-top-right-radius:4px}
+.bubble strong{color:var(--accent);font-weight:500}
+.bubble em{color:var(--accent2);font-style:italic}
+.bubble p{margin-bottom:9px}.bubble p:last-child{margin-bottom:0}
+.bubble ul,.bubble ol{padding-left:18px;margin:7px 0}
+.bubble li{margin-bottom:4px}
+.bubble h3{font-family:'Cormorant Garamond',serif;font-size:17px;color:var(--accent);margin:10px 0 5px;font-weight:600}
+.bubble code{background:rgba(255,255,255,0.06);border-radius:4px;padding:2px 6px;font-size:12.5px}
+.bubble hr{border:none;border-top:1px solid var(--border);margin:10px 0}
+.model-tag{font-size:10.5px;padding:2px 9px;border-radius:12px;border:1px solid;font-weight:500;display:inline-flex;align-items:center;gap:4px;width:fit-content}
+.model-tag.claude{border-color:rgba(232,200,122,0.35);color:var(--accent);background:rgba(232,200,122,0.05)}
+.model-tag.openai{border-color:rgba(125,211,168,0.35);color:var(--accent3);background:rgba(125,211,168,0.05)}
+.model-tag.gemini{border-color:rgba(91,164,207,0.35);color:var(--accent2);background:rgba(91,164,207,0.05)}
+.model-tag .mdot{width:5px;height:5px;border-radius:50%;background:currentColor}
+
+/* XP popup */
+.xp-popup{position:fixed;top:80px;right:20px;background:rgba(232,200,122,0.15);border:1px solid rgba(232,200,122,0.3);border-radius:12px;padding:10px 16px;font-size:13px;color:var(--accent);font-weight:600;z-index:1000;animation:xpPop 2s ease forwards;pointer-events:none}
+@keyframes xpPop{0%{opacity:0;transform:translateY(10px) scale(0.9)}15%{opacity:1;transform:translateY(0) scale(1)}70%{opacity:1}100%{opacity:0;transform:translateY(-20px)}}
+
+/* Typing */
+.typing-ind{display:flex;gap:4px;align-items:center;padding:12px 16px}
+.tdot{width:6px;height:6px;border-radius:50%;animation:tb 1.2s infinite}
+.tdot:nth-child(1){background:var(--accent)}
+.tdot:nth-child(2){background:var(--accent2);animation-delay:0.2s}
+.tdot:nth-child(3){background:var(--accent3);animation-delay:0.4s}
+@keyframes tb{0%,60%,100%{transform:translateY(0);opacity:0.3}30%{transform:translateY(-5px);opacity:1}}
+
+/* Input */
+/* ── INPUT AREA — PRODUCTION REDESIGN ─────────────────────── */
+#input-area{
+  position:relative;z-index:10;
+  border-top:1px solid var(--border);
+  background:rgba(8,10,15,0.97);
+  backdrop-filter:blur(20px);
+  padding:12px 20px 14px;
 }
 
-// -------------------------------------------------------------
-// LANGGRAPH-STYLE AGENT ROUTER
-// Analyses full context - decides which tools to run + order
-// Much smarter than keyword matching
-// -------------------------------------------------------------
-// ─────────────────────────────────────────────────────────────
-// PRE-AI CLARIFICATION ENGINE
-// Runs BEFORE GPT-4o — returns direct question if info missing
-// GPT-4o cannot override this — it never gets called
-// ─────────────────────────────────────────────────────────────
-function getClarification(message, intent, history, student) {
-  // Strip quotes from message — user sometimes types "message in quotes"
-  const msg = message.toLowerCase().trim().replace(/^["']|["']$/g, '');
-  const recentHistory = history.slice(-6).map(m => (m.content||'').toLowerCase()).join(' ');
-  const combined = msg + ' ' + recentHistory;
-  const name = student.name || 'there';
+/* Toolbar row above the input box */
+.input-toolbar{
+  max-width:760px;margin:0 auto 8px;
+  display:flex;align-items:center;gap:6px;
+  padding:0 2px;
+}
+.toolbar-chip{
+  display:flex;align-items:center;gap:5px;
+  padding:4px 10px;border-radius:20px;
+  background:var(--surface2);border:1px solid var(--border);
+  font-size:11px;color:var(--muted);font-family:'Outfit',sans-serif;
+  cursor:pointer;transition:all 0.15s;white-space:nowrap;user-select:none;
+}
+.toolbar-chip:hover{border-color:rgba(232,200,122,0.25);color:var(--text);}
+.toolbar-chip.active{background:rgba(232,200,122,0.08);border-color:rgba(232,200,122,0.3);color:var(--accent);}
+.toolbar-chip svg{flex-shrink:0}
+.toolbar-spacer{flex:1}
+/* Character counter */
+.char-counter{
+  font-size:10.5px;color:var(--muted2);font-family:'Outfit',sans-serif;
+  transition:color 0.2s;
+}
+.char-counter.warn{color:var(--danger);}
 
-  // ── Already in conversation — don't keep asking ──────────
-  // If we've exchanged 3+ messages, stop clarifying
-  const userMessages = history.filter(m => m.role === 'user');
-  if (userMessages.length > 3) return null;
-  
-  // If bot already asked a clarifying question recently, don't ask again
-  const recentBotMessages = history.slice(-4).filter(m => m.role === 'assistant');
-  const alreadyAsked = recentBotMessages.some(m => 
-    (m.content||'').includes('?') && 
-    ((m.content||'').includes('target') || (m.content||'').includes('level') || 
-     (m.content||'').includes('company') || (m.content||'').includes('hours'))
-  );
-  if (alreadyAsked) return null;
-
-  // ── Subject doubt — vague, no specific topic ─────────────
-  const subjectDoubt = intent.needsKnowledge &&
-    intent.mode === 'teaching' &&
-    !intent.subject &&
-    (msg.includes('doubt') || msg.includes('confused') ||
-     msg.includes("don't understand") || msg.includes('dont understand') ||
-     msg.includes('help me understand') || msg.includes('explain'));
-
-  if (subjectDoubt) {
-    return `Which topic specifically, ${name}? And what's the exact part that's confusing — the concept itself or applying it to problems?`;
-  }
-// ── EXAM PREP & STUDY PLANS — The Hard Gate (CBSE & General) ──
-  const isExamPrep = /gmat|cat|upsc|jee|neet|gate|clat|cbse|board|class 10|class 12/i.test(msg);
-  const wantsPlan = /plan|roadmap|prepare|preparation|schedule/i.test(msg);
-
-  if (isExamPrep || wantsPlan) {
-    const hasTimeline = /\d+\s*(month|week|day)/i.test(combined);
-    const hasLevel = /beginner|fresh|scratch|basics|know|started/i.test(combined);
-    const hasHours = /\d+\s*(hour|hr)|hour a day|per day/i.test(combined);
-    const hasSpecifics = /chapter|topic|weak|struggle|math|science|physics|chem|geometry/i.test(combined);
-
-    // GATE 1: Check for Time
-    if (!hasHours || !hasTimeline) {
-      return `I'd love to help you crush this, ${name}! To make a plan that actually works, how much time do we have left until the exam, and how many hours a day can you realistically commit?`;
-    }
-
-    // GATE 2: Check for Focus Areas (Rapport Building)
-    if (!hasSpecifics && !hasLevel) {
-      return `Got it. Since we have a clear timeline, let's get specific: are you starting from scratch, or are there 2-3 chapters currently giving you the most trouble?`;
-    }
-  }
+/* Main input box */
+.input-wrap{
+  max-width:760px;margin:0 auto;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:16px;
+  transition:border-color 0.2s,box-shadow 0.2s;
+  overflow:hidden;
+}
+.input-wrap:focus-within{
+  border-color:rgba(232,200,122,0.35);
+  box-shadow:0 0 0 3px rgba(232,200,122,0.06), 0 4px 24px rgba(0,0,0,0.4);
 }
 
-  if (examPrep && hasTimeline && !hasLevel) {
-    return `Got it, ${name}. Quick question before I build your plan — are you starting completely fresh, or have you studied for this before? And what score are you targeting?`;
-  }
+/* Textarea */
+.input-inner{
+  display:flex;align-items:flex-end;
+  padding:14px 16px 10px;gap:10px;
+}
+#user-input{
+  flex:1;background:transparent;border:none;outline:none;resize:none;
+  color:var(--text);font-family:'Outfit',sans-serif;font-size:15px;
+  font-weight:300;line-height:1.65;
+  max-height:200px;min-height:24px;
+  scrollbar-width:thin;scrollbar-color:var(--surface3) transparent;
+}
+#user-input::placeholder{color:var(--muted2);font-weight:300;}
+#user-input::-webkit-scrollbar{width:4px;}
+#user-input::-webkit-scrollbar-thumb{background:var(--surface3);border-radius:4px;}
 
-  // ── Interview prep — missing company and timeline ────────
-  const interviewPrep = /interview/i.test(msg) && intent.mode !== 'conversation';
-  const hasCompany = /google|amazon|microsoft|flipkart|tcs|infosys|wipro|meta|startup|mnc|accenture|deloitte|company/i.test(combined);
-  const hasInterviewTimeline = /tomorrow|today|\d+\s*day|\d+\s*week/i.test(combined);
+/* Bottom bar inside input box */
+.input-bottom-bar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:8px 14px 10px;
+  border-top:1px solid rgba(255,255,255,0.04);
+}
+.input-left-actions{display:flex;align-items:center;gap:4px;}
+.input-right-actions{display:flex;align-items:center;gap:6px;}
 
-  if (interviewPrep && !hasCompany && !hasInterviewTimeline) {
-    return `${name}, which company is this for — and when is the interview?`;
-  }
+/* Icon buttons inside input */
+.input-icon-btn{
+  width:30px;height:30px;border-radius:8px;
+  background:transparent;border:none;
+  color:var(--muted);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  transition:all 0.15s;font-size:14px;
+}
+.input-icon-btn:hover{background:var(--surface2);color:var(--text);}
+.input-icon-btn.active{color:var(--accent2);}
+#voice-btn{width:30px;height:30px;background:transparent;border:none;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.2s;color:var(--muted);}
+#voice-btn:hover{background:var(--surface2);color:var(--text);}
+#voice-btn.recording{background:rgba(224,112,112,0.12);color:var(--danger);animation:pulse 1s infinite;}
 
-  if (interviewPrep && hasCompany && !hasInterviewTimeline) {
-    return `How much time do you have to prepare — days or weeks?`;
-  }
-
-  // ── Study plan — missing hours ────────────────────────────
-  const studyPlan = intent.mode === 'study_plan' || /study plan|roadmap|how to prepare|preparation plan/i.test(msg);
-  const wantsStudyPlan = studyPlan && !hasHours;
-
-  if (wantsStudyPlan && userMessages.length <= 2) {
-    return `Before I build your plan, ${name} — how many hours a day can you realistically give? Be honest, not optimistic.`;
-  }
-
-  // ── Career transition — missing current role ─────────────
-  const careerTransition = /switch|transition|change.*career|become.*engineer|become.*manager|become.*developer/i.test(msg);
-  const hasCurrentRole = /currently|right now|i am a|i work as|my role|my job/i.test(combined);
-
-  if (careerTransition && !hasCurrentRole && userMessages.length <= 2) {
-    return `What's your current role, ${name}? And what's driving this change — a specific opportunity or a longer-term goal?`;
-  }
-
-  // No clarification needed — let AI handle it
-  return null;
+/* Keyboard shortcut hint */
+.kbd-hint{
+  font-size:10px;color:var(--muted2);
+  font-family:'Outfit',sans-serif;
+  display:flex;align-items:center;gap:4px;
+}
+kbd{
+  display:inline-flex;align-items:center;justify-content:center;
+  padding:1px 5px;border-radius:4px;
+  background:var(--surface3);border:1px solid rgba(255,255,255,0.08);
+  font-size:9.5px;color:var(--muted);font-family:'Outfit',sans-serif;
+  line-height:1.6;
 }
 
-function detectIntent(message, student = {}, history = []) {
-  const msg = message.toLowerCase().trim();
+/* Send button — refined */
+#send-btn{
+  height:34px;padding:0 14px;
+  background:var(--accent);border:none;border-radius:10px;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;
+  flex-shrink:0;transition:all 0.2s;color:#080a0f;
+  font-family:'Outfit',sans-serif;font-size:12px;font-weight:600;
+  letter-spacing:0.3px;
+}
+#send-btn:hover{opacity:0.88;transform:translateY(-1px);box-shadow:0 4px 12px rgba(232,200,122,0.25);}
+#send-btn:active{transform:translateY(0);}
+#send-btn:disabled{opacity:0.25;cursor:not-allowed;transform:none;box-shadow:none;}
+#send-btn .send-label{display:inline;}
 
-  // -- SUBJECT DETECTION -------------------------------------
-  let subject = null;
-  const subjectMap = {
-    'Physics':               ['physics','newton','force','motion','velocity','acceleration','electricity','magnetism','light','optics','pressure','thermodynamics','quantum','wave','energy','power','momentum','gravitation'],
-    'Chemistry':             ['chemistry','atom','reaction','acid','base','periodic','molecule','bond','element','compound','organic','inorganic','mole','oxidation','reduction','electrode','catalyst'],
-    'Biology':               ['biology','cell','photosynthesis','gene','dna','rna','evolution','organ','tissue','enzyme','hormone','ecosystem','nutrition','respiration','reproduction'],
-    'Mathematics':           ['math','maths','algebra','percentage','trigonometry','calculus','geometry','statistics','probability','matrix','derivative','integral','equation','polynomial','sequence','series'],
-    'CAT / MBA Preparation': ['cat','mba','reasoning','aptitude','seating','arrangement','data interpretation','logical','verbal','quant','di','lr','va','rc'],
-    'UPSC':                  ['upsc','ias','ips','polity','constitution','history','geography','economy','governance','international','current affairs','prelims','mains'],
-    'SSC':                   ['ssc','cgl','chsl','gd','constable','quantitative','english grammar','general awareness'],
-    'Banking':               ['banking','ibps','sbi','rbi','po','clerk','financial awareness','banking awareness','money market']
-  };
+/* Typing indicator dot (shows when AI is responding) */
+.input-status{
+  max-width:760px;margin:6px auto 0;
+  min-height:16px;
+  font-size:10.5px;color:var(--muted2);font-family:'Outfit',sans-serif;
+  display:flex;align-items:center;gap:6px;padding:0 4px;
+}
+.input-actions{display:flex;gap:6px;align-items:center;flex-shrink:0;}
+/* voice + send handled above in input redesign */@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(224,112,112,0.3)}50%{box-shadow:0 0 0 6px rgba(224,112,112,0)}}
+/* send btn handled above */
+/* input-hint replaced by .input-status */
 
-  for (const [sub, keywords] of Object.entries(subjectMap)) {
-    if (keywords.some(k => msg.includes(k))) { subject = sub; break; }
-  }
+/* Routing status */
+#route-status{position:relative;z-index:9;display:none;align-items:center;gap:8px;padding:7px 20px;background:rgba(167,139,250,0.05);border-bottom:1px solid rgba(167,139,250,0.12);font-size:11.5px;color:var(--sage)}
+#route-status.on{display:flex}
+.rdots{display:flex;gap:3px}
+.rdot{width:4px;height:4px;border-radius:50%;background:var(--sage);animation:routeP 1s infinite}
+.rdot:nth-child(2){animation-delay:0.2s}.rdot:nth-child(3){animation-delay:0.4s}
+@keyframes routeP{0%,60%,100%{opacity:0.3;transform:scale(0.8)}30%{opacity:1;transform:scale(1.3)}}
 
-  // -- INTENT SIGNALS ----------------------------------------
-  const signals = {
-    // Teaching signals
-    wantsExplanation: ['explain','teach','what is','how does','tell me about','help me understand',
-      'define','concept','show me','what are','how do','why does','describe','elaborate','break down'].some(k => msg.includes(k)),
+.error-msg{color:var(--danger);font-size:13px;padding:9px 14px;background:rgba(224,112,112,0.07);border:1px solid rgba(224,112,112,0.18);border-radius:10px}
 
-    // Flashcard signals
-    wantsFlashcards: ['flashcard','flash card','quiz me','test me','quick revision','revise',
-      'rapid fire','quick test','memory test','recall'].some(k => msg.includes(k)),
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
 
-    // Practice signals
-    wantsPractice: ['practice','give me a question','problem','solve','exercise',
-      'example question','mock','attempt','try me','challenge me','harder question',
-      'previous year','pyq','past paper'].some(k => msg.includes(k)),
-
-    // Emotional signals
-    needsSupport: ['stressed','anxious','scared','worried','overwhelmed','tired',
-      'frustrated','cant focus','giving up','hopeless','demotivated','no motivation',
-      'whats the point','want to quit','lost','help'].some(k => msg.includes(k)),
-
-    // Comparison / decision signals  
-    wantsComparison: ['difference between','compare','vs','versus','which is better',
-      'whats better','distinguish','contrast','similarities'].some(k => msg.includes(k)),
-
-    // Summary signals
-    wantsSummary: ['summarize','summary','overview','brief','tldr','in short',
-      'key points','main points','gist','recap'].some(k => msg.includes(k)),
-
-    // Study plan signals
-    wantsStudyPlan: ['study plan','schedule','timetable','how to prepare','preparation plan',
-      'strategy','roadmap','how many days','how long to prepare'].some(k => msg.includes(k)),
-
-    // Web search signals
-    needsWebSearch: [
-      'today','yesterday','this week','this month','this year',
-      'latest','recent','current','now','right now',
-      '2024','2025','2026',
-      'news','happened','update','announced','launched',
-      // NOTE: Do NOT add generic time words here — they cause false positives
-      'who is','who won','who became','who got',
-      'exam date','notification','result','cutoff','vacancy','recruitment',
-      'admit card','syllabus 2025','new pattern',
-      'upsc 2025','ssc 2025','ibps 2025','sbi po 2025','neet 2025','jee 2025','cat 2025',
-      'election','government policy','new scheme','budget 2025','parliament',
-      'prime minister','president','minister','new bill',
-      'repo rate','inflation rate','gdp growth','rbi policy','sebi',
-      'stock market','sensex','nifty','rupee','dollar rate',
-      'ipl','cricket','football','olympics','world cup',
-      'how many','what happened','any news','tell me about recent'
-    ].some(k => msg.includes(k))
-  };
-
-  // -- CONTEXT-AWARE ROUTING ---------------------------------
-  // Check conversation history for context
-  const recentHistory = history.slice(-4).map(m => (m.content || '').toLowerCase());
-  const isFollowUp = recentHistory.length > 0;
-  const prevWasPractice = recentHistory.some(m => m.includes('try') || m.includes('solve') || m.includes('attempt'));
-
-  // -- MULTI-TOOL DECISION ENGINE ----------------------------
-  // Unlike simple keyword matching, this decides COMBINATIONS
-
-  // SCENARIO 1: Emotional + Academic = support first, then teach
-  const needsEmotionalFirst = signals.needsSupport && (signals.wantsExplanation || subject);
-
-  // SCENARIO 2: Web + Teaching = search live data + explain concept
-  const needsWebAndTeach = signals.needsWebSearch && (signals.wantsExplanation || subject);
-
-  // SCENARIO 3: Exam panic = rapid revision mode
-  const isExamPanic = msg.includes('exam') && (msg.includes('tomorrow') || msg.includes('today') || msg.includes('tonight'));
-
-  // SCENARIO 4: Follow-up after practice = check answer + next problem
-  const isAnswerAttempt = prevWasPractice && !signals.wantsExplanation && msg.length < 100;
-
-  // SCENARIO 5: Pure conversation (greeting, thanks, general chat)
-  // Override web search if user is clearly in study/exam context
-  // Prevents "I prepared 7 years ago" from triggering news search
-  const isStudyContext = signals.wantsPractice || signals.wantsFlashcards ||
-    signals.wantsExplanation || signals.wantsSummary || signals.wantsStudyPlan ||
-    (subject !== null);
-  if (isStudyContext && signals.needsWebSearch) {
-    // Only keep web search if message has clear current-events signal
-    const hasCurrentEventsSignal = ['news','today','latest','current','2025','2026',
-      'announced','launched','just released','this week'].some(k => msg.includes(k));
-    if (!hasCurrentEventsSignal) {
-      signals.needsWebSearch = false;
-    }
-  }
-
-  const isPureConversation = !subject && !signals.wantsExplanation && !signals.wantsPractice &&
-    !signals.wantsFlashcards && !signals.needsWebSearch && !signals.needsSupport &&
-    ['hi','hello','hey','thanks','thank you','ok','okay','great','nice','cool','bye'].some(k => msg.includes(k));
-
-  // -- DETERMINE PRIMARY MODE --------------------------------
-  let mode = 'teaching'; // default
-  if (signals.wantsFlashcards)  mode = 'flashcards';
-  if (signals.wantsPractice)    mode = 'practice';
-  if (signals.wantsSummary)     mode = 'summary';
-  if (signals.wantsStudyPlan)   mode = 'study_plan';
-  if (signals.wantsComparison)  mode = 'comparison';
-  if (signals.needsSupport && !subject) mode = 'emotional_support';
-  if (isExamPanic)              mode = 'exam_panic';
-  if (isAnswerAttempt)          mode = 'check_answer';
-  if (isPureConversation)       mode = 'conversation';
-
-  // -- BUILD TOOL SEQUENCE -----------------------------------
-  const tools = [];
-  if (signals.needsWebSearch)                                    tools.push('web_search');
-  if (signals.wantsExplanation || subject || signals.wantsPractice || signals.wantsFlashcards) tools.push('knowledge_base');
-  if (signals.needsSupport || needsEmotionalFirst)               tools.push('emotional_support');
-
-  // -- SOCRATIC INTAKE DETECTION ----------------------------
-  const socraticTriggers = [
-    // Interview
-    'interview tomorrow','interview today','interview this week',
-    'got an interview','have an interview','i have an interview',
-    // Exam
-    'exam tomorrow','exam today','exam this week',
-    'test tomorrow','test today','paper tomorrow','viva tomorrow',
-    // Presentation
-    'presentation tomorrow','presentation today','demo tomorrow','present tomorrow',
-    // Study plan - needs diagnosis before building
-    'make a study plan','make me a study plan','create a study plan',
-    'study plan','make a plan','create a plan','build a plan',
-    'help me prepare','help me study','how should i prepare',
-    'prepare for','i want to prepare','i need to prepare',
-    // New goal
-    'want to learn','want to start','how do i start','where do i begin',
-    'i want to become','planning to learn','want to become',
-    // Stuck
-    'feeling stuck','dont know what to do','no direction',
-    'confused about career','what should i do with',
-    // Startup
-    'started a startup','have an idea','building a product','launching soon',
-    // Job
-    'got a job offer','job offer','should i join','negotiating salary'
-  ];
-
-  let socraticMode = socraticTriggers.some(t => msg.includes(t));
-
-  // Keep socratic mode going until we have enough context
-  // Check if the ORIGINAL situation trigger appeared in recent history
-  const situationInHistory = history.slice(-6).some(m =>
-    socraticTriggers.some(t => (m.content || '').toLowerCase().includes(t))
-  );
-
-  // Check if we have gathered enough answers (3+ student replies after trigger)
-  const studentRepliesAfterTrigger = history.slice(-6).filter(m => m.role === 'user').length;
-  const hasEnoughContext = studentRepliesAfterTrigger >= 3;
-
-  // Trigger socratic if: situation detected NOW, or situation was recent and not enough context yet
-  if (socraticMode || (situationInHistory && !hasEnoughContext)) {
-    mode = 'socratic_intake';
-  }
-
-  console.log('[BRAIN] Agent decision:', { mode, subject, tools, socraticMode, signals: Object.keys(signals).filter(k => signals[k]) });
-
-  return {
-    // Core flags
-    needsKnowledge:  tools.includes('knowledge_base'),
-    needsWebSearch:  tools.includes('web_search'),
-    needsEmotionalFirst,
-    needsWebAndTeach,
-    isExamPanic,
-    isAnswerAttempt,
-
-    // Mode
-    mode,
-    content_type: mode === 'flashcards' ? 'flashcards' : mode === 'practice' ? 'practice' : 'teaching',
-
-    // Subject
-    subject,
-
-    // Tools to run
-    tools,
-
-    // Legacy flags
-    wantsFlashcards: signals.wantsFlashcards,
-    wantsPractice:   signals.wantsPractice,
-    isEmotional:     signals.needsSupport
-  };
+/* Responsive */
+@media(max-width:480px){
+  .persona-grid{grid-template-columns:1fr 1fr}
+  .traits-grid{grid-template-columns:1fr}
+  .choice-grid{grid-template-columns:1fr}
 }
 
-// -------------------------------------------------------------
-// SEARCH PINECONE FOR RIGHT CONTENT
-// Now calls the production RAG endpoint which handles:
-// - query rewriting for vague messages
-// - score threshold filtering
-// - dynamic top_k by mode
-// - retry logic on Pinecone timeouts
-// - context window budget
-// Returns { context, noRelevantContent } instead of raw string
-// so chat.js can handle the "no results" case without hallucinating
-// -------------------------------------------------------------
-async function searchKnowledge(query, learning_style, subject, content_type, mode, recentHistory = []) {
-  try {
-    const { PINECONE_API_KEY, PINECONE_HOST, OPENAI_API_KEY } = process.env;
+/* -- AUTH SCREEN -- */
+#screen-auth{background:var(--bg)}
+.auth-card{background:var(--surface);border:1px solid var(--border);border-radius:24px;padding:clamp(24px,5vw,44px);max-width:460px;width:100%;animation:fadeUp 0.4s ease both}
+.auth-logo{font-family:'Cormorant Garamond',serif;font-size:34px;font-weight:700;text-align:center;margin-bottom:4px}
+.auth-logo span{color:var(--accent)}
+.auth-sub{font-size:13px;color:var(--muted);text-align:center;margin-bottom:28px;font-weight:300;line-height:1.6}
+.auth-tabs{display:flex;background:var(--surface2);border-radius:10px;padding:3px;margin-bottom:22px;gap:3px}
+.auth-tab{flex:1;padding:9px;border:none;background:transparent;color:var(--muted);cursor:pointer;border-radius:8px;font-family:'Outfit',sans-serif;font-size:13px;font-weight:500;transition:all 0.2s}
+.auth-tab.active{background:var(--surface3);color:var(--text)}
+.auth-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.auth-field{margin-bottom:13px}
+.auth-field label{font-size:11.5px;color:var(--muted);margin-bottom:5px;display:block;text-transform:uppercase;letter-spacing:0.3px}
+.auth-field input,.auth-field select{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:11px 13px;color:var(--text);font-family:'Outfit',sans-serif;font-size:13.5px;outline:none;transition:border-color 0.2s}
+.auth-field select option{background:var(--surface2);color:var(--text)}
+.auth-field input:focus,.auth-field select:focus{border-color:var(--accent)}
+.auth-field input::placeholder{color:var(--muted2)}
+.auth-msg{font-size:12.5px;border-radius:8px;padding:9px 12px;margin-bottom:12px;display:none}
+.auth-msg.err{color:var(--danger);background:rgba(224,112,112,0.08);border:1px solid rgba(224,112,112,0.2)}
+.auth-msg.ok{color:var(--accent3);background:rgba(125,211,168,0.08);border:1px solid rgba(125,211,168,0.2)}
+.auth-msg.show{display:block}
+.auth-footer{text-align:center;font-size:12px;color:var(--muted2);margin-top:14px}
+.auth-footer span{color:var(--accent);cursor:pointer}
+.auth-footer span:hover{opacity:0.8}
 
-    if (!PINECONE_API_KEY || !PINECONE_HOST) {
-      console.warn('[RAG] Pinecone env vars missing — skipping knowledge search');
-      return { context: '', noRelevantContent: true };
-    }
+/* -- STUDY TOGETHER MODE -- */
+.study-mode-banner{background:linear-gradient(135deg,rgba(232,200,122,0.12),rgba(91,164,207,0.08));border:1px solid rgba(232,200,122,0.25);border-radius:14px;padding:12px 16px;margin:10px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.study-mode-info{display:flex;align-items:center;gap:10px}
+.study-mode-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:pulse 2s infinite}
+.study-mode-text{font-size:12.5px;color:var(--accent);font-weight:500}
+.study-mode-sub{font-size:11px;color:var(--muted);margin-top:2px}
+.study-end-btn{font-size:11px;color:var(--muted);background:transparent;border:1px solid var(--border);border-radius:8px;padding:5px 10px;cursor:pointer;font-family:'Outfit',sans-serif;white-space:nowrap}
+.study-end-btn:hover{color:var(--danger);border-color:var(--danger)}
+.study-day-card{background:linear-gradient(135deg,var(--surface2),var(--surface3));border:1px solid rgba(232,200,122,0.2);border-radius:16px;padding:20px;margin:8px 0}
+.study-day-header{font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;font-weight:600}
+.study-day-title{font-size:17px;font-weight:600;color:var(--text);margin-bottom:10px;font-family:'Cormorant Garamond',serif}
+.study-choice-row{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+.study-choice{background:var(--surface);border:1px solid var(--border2);border-radius:10px;padding:10px 16px;font-size:13px;color:var(--text);cursor:pointer;transition:all 0.2s;font-family:'Outfit',sans-serif}
+.study-choice:hover{border-color:var(--accent);color:var(--accent)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
 
-    // ── Query Rewriting ──────────────────────────────────────
-    // Rewrites vague follow-ups ("explain it again", "I don't get it")
-    // into clean search queries before hitting Pinecone
-    const cleanQuery = await rewriteQuery(query, recentHistory, OPENAI_API_KEY);
-    console.log(`[RAG] Query: "${query}" → "${cleanQuery}"`);
-
-    // ── Dynamic top_k by mode ────────────────────────────────
-    const topK = getTopK(mode);
-
-    // ── Embed with correct dimensions for your 1024-dim index ──
-    const embedRes = await fetch('https://api.openai.com/v1/embeddings', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
-      body: JSON.stringify({
-        input:      cleanQuery,
-        model:      'text-embedding-3-small',
-        dimensions: 1024   // Critical: must match your Pinecone index dimensions
-      })
-    });
-
-    const embedData = await embedRes.json();
-    if (!embedData.data) {
-      console.error('[RAG] Embedding failed:', embedData.error?.message || 'unknown');
-      return { context: '', noRelevantContent: true };
-    }
-    const vector = embedData.data[0].embedding;
-
-    // ── Pinecone search with subject filter + retry ───────────
-    let pineconeData = await queryPinecone(PINECONE_HOST, PINECONE_API_KEY, vector, topK, subject);
-
-    // Single retry on failure (handles transient timeouts)
-    if (!pineconeData) {
-      console.warn('[RAG] Retrying Pinecone after 500ms...');
-      await new Promise(r => setTimeout(r, 500));
-      pineconeData = await queryPinecone(PINECONE_HOST, PINECONE_API_KEY, vector, topK, subject);
-    }
-
-    if (!pineconeData) {
-      console.error('[RAG] Pinecone unavailable after retry');
-      return { context: '', noRelevantContent: true };
-    }
-
-    const allHits = pineconeData.matches || [];
-
-    // ── Score threshold filtering ─────────────────────────────
-    // Chunks below MIN_SCORE are noise — don't send to AI
-    const MIN_SCORE = 0.55;
-    const hits = allHits.filter(h => (h.score || 0) >= MIN_SCORE);
-    const topScore = allHits[0]?.score || 0;
-
-    console.log(`[RAG] ${allHits.length} raw hits | ${hits.length} passed score ${MIN_SCORE} | top: ${topScore.toFixed(3)}`);
-    console.log('[PINECONE RAW HITS]', JSON.stringify(allHits.map(h => ({ score: h.score, meta: h.metadata })), null, 2));
-
-    // ── noRelevantContent signal ──────────────────────────────
-    // Explicit flag so caller knows to use general knowledge
-    // instead of letting AI silently hallucinate specifics
-    if (hits.length === 0) {
-      console.log('[RAG] No chunks passed threshold — noRelevantContent = true');
-      return { context: '', noRelevantContent: true, topScore };
-    }
-
-    // ── Build context with hard character budget ─────────────
-    // Prevents silent prompt overflow that truncates AI responses
-    const MAX_CONTEXT_CHARS = 3000; // ~750 tokens — safe within max_tokens:1200
-    let context = '';
-    let usedChunks = 0;
-
-    for (let i = 0; i < hits.length; i++) {
-      const m    = hits[i].metadata || {};
-      const text = m.text || m.chunk_text || m.page_content || m.content || '';
-      if (!text) continue;
-
-      const chunk = `[Source ${i + 1}]: ${text}`;
-      if ((context + chunk).length > MAX_CONTEXT_CHARS) {
-        console.log(`[RAG] Context budget reached at chunk ${i + 1}`);
-        break;
-      }
-      context += chunk + '\n\n';
-      usedChunks++;
-    }
-
-    console.log(`[RAG CONTEXT] ${usedChunks} chunks used, ${context.length} chars`);
-
-    if (!context) {
-      return { context: '', noRelevantContent: true };
-    }
-
-    return {
-      context: `KNOWLEDGE BASE DATA:\n${context}`,
-      noRelevantContent: false,
-      topScore
-    };
-
-  } catch (err) {
-    console.error('[RAG] searchKnowledge error:', err.message);
-    return { context: '', noRelevantContent: true };
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
   }
-}
+  .stream-bubble .cursor { margin-left: 2px; }
 
-// ─────────────────────────────────────────────────────────────
-// QUERY REWRITER (inline in chat.js — no extra API route needed)
-// Uses GPT-4o-mini to clean up vague student messages
-// Falls back to original query silently on any failure
-// ─────────────────────────────────────────────────────────────
-async function rewriteQuery(query, recentHistory = [], openAiKey) {
-  // Skip rewrite for clear, specific queries — saves cost + latency
-  const isAlreadyClear = query.length > 15 &&
-    !/(it|this|that|again|re-?explain|don.?t get|what do you mean|huh|still|same thing)/i.test(query);
+  /* -- Markdown Tables -- */
+  .tbl-wrap { overflow-x: auto; margin: 12px 0; }
+  .md-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  .md-table th { background: rgba(255,180,50,0.15); color: #f5c842; font-weight: 600; padding: 8px 12px; border: 1px solid rgba(255,255,255,0.1); text-align: left; }
+  .md-table td { padding: 7px 12px; border: 1px solid rgba(255,255,255,0.08); color: #e0e0e0; }
+  .md-table tr:nth-child(even) td { background: rgba(255,255,255,0.03); }
+  .md-table tr:hover td { background: rgba(255,180,50,0.05); }
 
-  if (isAlreadyClear || !openAiKey) return query;
+</style>
+</head>
+<body>
 
-  try {
-    const historySnippet = recentHistory
-      .slice(-3)
-      .map(m => `${m.role === 'user' ? 'Student' : 'Mentor'}: ${(m.content || '').slice(0, 150)}`)
-      .join('\n');
+<!-- == SCREEN 1: WELCOME == -->
+<div class="screen hidden" id="screen-welcome">
+  <div class="logo-big">Mentor<span>AI</span></div>
+  <p class="tagline">Your personal AI mentor that truly knows you - your personality, your goals, your pace.</p>
+  <div class="floating-tags">
+    <span class="ftag"> Psychometric Profiling</span>
+    <span class="ftag"> Goal Tracking</span>
+    <span class="ftag"> Smart AI Routing</span>
+    <span class="ftag"> Streaks & XP</span>
+    <span class="ftag"> Mentor Personas</span>
+    <span class="ftag"> Voice Input</span>
+  </div>
+  <button class="btn-primary" onclick="goTo('screen-auth')">Begin Your Journey -></button>
+</div>
 
-    const prompt = `You are rewriting a student's vague message into a clean knowledge-base search query.
+<!-- == AUTH: SIGN IN / SIGN UP == -->
+<div class="screen hidden" id="screen-auth">
+  <div class="auth-card">
+    <div class="auth-logo">Mentor<span>AI</span></div>
+    <p class="auth-sub">Your personal AI mentor that truly knows you.</p>
+    <div class="auth-tabs">
+      <button class="auth-tab active" id="tab-login" onclick="switchTab('login')">Sign In</button>
+      <button class="auth-tab" id="tab-signup" onclick="switchTab('signup')">Create Account</button>
+    </div>
+    <div id="auth-msg" class="auth-msg err"></div>
 
-Recent conversation:
-${historySnippet || '(no history)'}
+    <!-- SIGNUP ONLY FIELDS -->
+    <div id="signup-fields">
+      <div class="auth-field">
+        <label>Your Name</label>
+        <input type="text" id="auth-name" placeholder="What should we call you?" />
+      </div>
+      <div class="auth-row">
+        <div class="auth-field">
+          <label>Age</label>
+          <input type="number" id="auth-age" placeholder="e.g. 24" min="13" max="80" />
+        </div>
+        <div class="auth-field">
+          <label>Gender</label>
+          <select id="auth-gender">
+            <option value="" disabled selected>Select</option>
+            <option value="Male">Male</option>
+            <option value="Female">Female</option>
+            <option value="Non-binary">Non-binary</option>
+            <option value="Prefer not to say">Prefer not to say</option>
+          </select>
+        </div>
+      </div>
+    </div>
 
-Student's message: "${query}"
+    <!-- COMMON FIELDS -->
+    <div class="auth-field">
+      <label>Email Address</label>
+      <input type="email" id="auth-email" placeholder="you@example.com" />
+    </div>
+    <div class="auth-field">
+      <label>Password</label>
+      <input type="password" id="auth-password" placeholder="Min 6 characters" onkeydown="if(event.key==='Enter')handleAuth()" />
+    </div>
 
-Write ONE short search query (5-12 words) capturing what concept they need explained.
-Return ONLY the query. No punctuation, no explanation, no quotes.`;
+    <button class="btn-primary" id="auth-btn" onclick="handleAuth()" style="width:100%;margin-top:4px">Sign In -></button>
+    <div class="auth-footer" id="auth-footer">
+      Don't have an account? <span onclick="switchTab('signup')">Create one free -></span>
+    </div>
+  </div>
+</div>
 
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${openAiKey}` },
-      body: JSON.stringify({
-        model:       'gpt-4o-mini',
-        messages:    [{ role: 'user', content: prompt }],
-        max_tokens:  40,
-        temperature: 0.1
-      })
-    });
+<!-- == SCREEN 2: ONBOARDING == -->
+<div class="screen hidden" id="screen-onboard">
+  <div class="onboard-card">
+    <div class="step-indicator" id="step-dots"></div>
+    <div id="onboard-content"></div>
+  </div>
+</div>
 
-    const data = await res.json();
-    const rewritten = data?.choices?.[0]?.message?.content?.trim();
-    return (rewritten && rewritten.length > 3) ? rewritten : query;
+<!-- == SCREEN 3: PSYCHOMETRIC == -->
+<div class="screen hidden" id="screen-psych">
+  <div class="onboard-card" style="max-width:600px">
+    <div style="margin-bottom:8px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px">Personality Assessment</div>
+    <h2 class="onboard-q" id="psych-title">Understanding You</h2>
+    <p class="onboard-sub">Answer honestly - there are no right or wrong answers. This helps your mentor adapt to your personality.</p>
+    <div class="psych-progress"><div class="psych-progress-bar" id="psych-bar" style="width:0%"></div></div>
+    <div id="psych-questions"></div>
+    <div class="onboard-nav">
+      <button class="btn-back" onclick="goTo('screen-onboard')"><- Back</button>
+      <button class="btn-next" id="psych-next" onclick="nextPsychQ()" disabled>Next -></button>
+    </div>
+  </div>
+</div>
 
-  } catch (err) {
-    console.warn('[RAG] Query rewrite failed (non-critical):', err.message);
-    return query;
-  }
-}
+<!-- == SCREEN 4: PERSONALITY RESULT == -->
+<div class="screen hidden" id="screen-result">
+  <div class="result-card">
+    <div style="font-size:48px;margin-bottom:12px" id="result-emoji"></div>
+    <div class="result-type" id="result-type">The Visionary</div>
+    <p class="result-desc" id="result-desc">Loading your profile...</p>
+    <div class="traits-grid" id="traits-grid"></div>
+    <button class="btn-primary" onclick="goTo('screen-persona')" style="width:100%">Choose Your Mentor Style -></button>
+  </div>
+</div>
 
-// ─────────────────────────────────────────────────────────────
-// DYNAMIC top_k
-// Fewer chunks for panicked/tired students, more for deep modes
-// ─────────────────────────────────────────────────────────────
-function getTopK(mode) {
-  const map = {
-    exam_panic:  2,
-    tired:       2,
-    flashcards:  3,
-    summary:     4,
-    teaching:    5,
-    practice:    5,
-    comparison:  8,
-    study_plan:  6
-  };
-  return map[mode] || 5;
-}
+<!-- == SCREEN 5: PERSONA SELECTOR == -->
+<div class="screen hidden" id="screen-persona">
+  <div style="text-align:center;margin-bottom:28px;animation:fadeUp 0.4s ease both">
+    <h2 style="font-family:'Cormorant Garamond',serif;font-size:clamp(28px,5vw,42px);font-weight:700;margin-bottom:8px">Choose Your <span style="color:var(--accent)">Mentor</span></h2>
+    <p style="color:var(--muted);font-size:14px;font-weight:300">How should your mentor communicate with you?</p>
+  </div>
+  <div class="persona-grid">
+    <div class="persona-card" data-p="coach" onclick="selectPersona(this)">
+      <span class="persona-emoji"></span>
+      <div class="persona-name">The Coach</div>
+      <div class="persona-desc">Direct, tough-love, no excuses. Pushes you beyond your comfort zone.</div>
+    </div>
+    <div class="persona-card" data-p="strategist" onclick="selectPersona(this)">
+      <span class="persona-emoji"></span>
+      <div class="persona-name">The Strategist</div>
+      <div class="persona-desc">Logical, data-driven, structured. Breaks everything into clear systems.</div>
+    </div>
+    <div class="persona-card" data-p="friend" onclick="selectPersona(this)">
+      <span class="persona-emoji"></span>
+      <div class="persona-name">The Friend</div>
+      <div class="persona-desc">Warm, casual, empathetic. Feels like talking to your smartest friend.</div>
+    </div>
+    <div class="persona-card" data-p="sage" onclick="selectPersona(this)">
+      <span class="persona-emoji"></span>
+      <div class="persona-name">The Sage</div>
+      <div class="persona-desc">Philosophical, deep, thought-provoking. Asks the questions you avoid.</div>
+    </div>
+  </div>
+  <button class="btn-next" id="persona-next" onclick="confirmPersona()" disabled style="width:100%;max-width:560px;padding:14px">Continue -></button>
+</div>
 
-// ─────────────────────────────────────────────────────────────
-// PINECONE QUERY (isolated for clean retry)
-// ─────────────────────────────────────────────────────────────
-async function queryPinecone(host, apiKey, vector, topK, subject) {
-  try {
-    // Add subject filter if we know the subject and metadata was stored at ingest
-    const filter = subject ? { subject: { '$eq': subject } } : undefined;
+<!-- == SCREEN 6: API KEYS == -->
+<div class="screen hidden" id="screen-keys">
+  <div class="keys-card" style="text-align:center">
+    <div style="font-size:48px;margin-bottom:16px"></div>
+    <div class="keys-title">You're all set!</div>
+    <p class="keys-sub" style="margin-bottom:28px">Your AI mentor is powered by Claude, GPT-4o, and Gemini - all connected securely. No setup needed.</p>
+    <div style="display:flex;gap:10px;justify-content:center;margin-bottom:28px">
+      <span style="font-size:12px;padding:6px 14px;border-radius:20px;border:1px solid rgba(232,200,122,0.3);color:var(--accent)">v Claude</span>
+      <span style="font-size:12px;padding:6px 14px;border-radius:20px;border:1px solid rgba(125,211,168,0.3);color:var(--accent3)">v GPT-4o</span>
+      <span style="font-size:12px;padding:6px 14px;border-radius:20px;border:1px solid rgba(91,164,207,0.3);color:var(--accent2)">v Gemini</span>
+    </div>
+    <button class="btn-primary" onclick="saveKeysAndStart()" style="width:100%">Begin My Journey -></button>
+  </div>
+</div>
 
-    const res = await fetch(`${host}/query`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'Api-Key': apiKey },
-      body: JSON.stringify({
-        vector,
-        topK,
-        includeMetadata: true,
-        namespace: '',
-        ...(filter && { filter })
-      })
-    });
+<!-- == SCREEN 7: MAIN APP == -->
+<div class="screen hidden" id="screen-app" style="position:relative;overflow:visible">
 
-    if (!res.ok) {
-      console.error(`[RAG] Pinecone HTTP ${res.status}:`, await res.text());
-      return null;
-    }
+  <div class="app-header">
+    <div class="app-logo">Mentor<span>AI</span></div>
+    <div class="user-info">
+      <div class="user-avatar" id="hdr-avatar">?</div>
+      <div>
+        <div class="user-name-small" id="hdr-name">User</div>
+        <div class="user-level" id="hdr-level">Level 1</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div class="persona-indicator" id="persona-ind">Coach</div>
+      <button class="icon-btn" onclick="toggleSettings()" title="Settings"></button>
+      <button class="icon-btn" onclick="resetAll()" title="Reset"></button>
+      <button class="icon-btn" onclick="signOut()" title="Sign Out" style="color:var(--danger)"></button>
+    </div>
+  </div>
 
-    return await res.json();
+  <div class="xp-bar-wrap">
+    <span class="xp-label" id="xp-label">XP: 0 / 100</span>
+    <div class="xp-bar"><div class="xp-fill" id="xp-fill" style="width:0%"></div></div>
+    <div class="streak-badge" id="streak-badge"> 0 day streak</div>
+  </div>
 
-  } catch (err) {
-    console.error('[RAG] queryPinecone fetch error:', err.message);
-    return null;
-  }
-}
+  <div id="route-status">
+    <div class="rdots"><div class="rdot"></div><div class="rdot"></div><div class="rdot"></div></div>
+    <span id="route-msg">Routing...</span>
+  </div>
 
-// -------------------------------------------------------------
-// AUTO EMOTION DETECTOR
-// Reads tone, words, punctuation - no AI call needed
-// -------------------------------------------------------------
-function detectEmotionFromMessage(message, history = []) {
-  const msg = message.toLowerCase().trim();
-  const scores = {};
+  <div id="chat-container">
+    <div class="messages-wrap" id="messages"></div>
+  </div>
 
-  const signals = {
-    panicked: {
-      keywords: ['exam tomorrow','exam today','test tomorrow','haven\'t studied',
-        'know nothing','don\'t know anything','running out of time','only hours left',
-        'help me fast','urgent','emergency','please fast','paper tomorrow'],
-      patterns: [/exam.{0,10}tomorrow/i,/test.{0,10}tomorrow/i,/\d+\s*hours?\s*left/i],
-      weight: 3
+  <div id="input-area">
+
+    <!-- Quick-action chips toolbar -->
+    <div class="input-toolbar">
+      <button class="toolbar-chip" onclick="insertChip('Explain ')" title="Ask for explanation">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+        Explain
+      </button>
+      <button class="toolbar-chip" onclick="insertChip('Give me a practice question on ')" title="Practice mode">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+        Practice
+      </button>
+      <button class="toolbar-chip" onclick="insertChip('Summarise ')" title="Summary mode">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+        Summarise
+      </button>
+      <button class="toolbar-chip" onclick="insertChip('Quiz me on ')" title="Flashcard mode">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M12 12h.01"/></svg>
+        Quiz me
+      </button>
+      <button class="toolbar-chip" onclick="insertChip('Make a study plan for ')" title="Study plan">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+        Study plan
+      </button>
+      <div class="toolbar-spacer"></div>
+      <span class="char-counter" id="char-counter"></span>
+    </div>
+
+    <!-- Input box -->
+    <div class="input-wrap">
+      <div class="input-inner">
+        <textarea id="user-input" placeholder="Ask your mentor anything..." rows="1"></textarea>
+      </div>
+
+      <!-- Bottom bar: left actions + keyboard hint + send -->
+      <div class="input-bottom-bar">
+        <div class="input-left-actions">
+          <button id="voice-btn" onclick="toggleVoice()" title="Voice input" class="input-icon-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10a7 7 0 01-14 0M12 19v3M8 22h8"/></svg>
+          </button>
+          <button class="input-icon-btn" onclick="clearInput()" title="Clear">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>
+          </button>
+        </div>
+
+        <div class="kbd-hint">
+          <kbd>Enter</kbd> send &nbsp;·&nbsp; <kbd>Shift</kbd><kbd>↵</kbd> new line
+        </div>
+
+        <div class="input-right-actions">
+          <button id="send-btn" onclick="sendMessage()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2L15 22 11 13 2 9l20-7z"/></svg>
+            <span class="send-label">Send</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status line below box -->
+    <div class="input-status" id="input-status">
+      <span id="input-status-text"></span>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ===============================================================
+// SUPABASE - AUTH & DATABASE
+// ===============================================================
+const SUPABASE_URL = 'https://odoxoyiyysuukgpdzhvt.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9kb3hveWl5eXN1dWtncGR6aHZ0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNTY5NzksImV4cCI6MjA4NzkzMjk3OX0.sDcg4VmA8n2o0hiLbKJyeqMDcIy_R9EECbIc3ChOMRQ';
+// sb = our supabase client (avoid conflict with window.supabase from CDN)
+let sb;
+let currentUser = null;
+try {
+  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+} catch(e) {
+  console.error('Supabase init error:', e);
+  sb = {
+    auth: {
+      signInWithPassword: async()=>({error:{message:'Auth service unavailable. Please try again.'}}),
+      signUp: async()=>({data:{user:null},error:{message:'Auth service unavailable. Please try again.'}}),
+      signOut: async()=>({}),
+      getSession: async()=>({data:{session:null}}),
+      onAuthStateChange: ()=>({data:{subscription:{unsubscribe:()=>{}}}})
     },
-    frustrated: {
-      keywords: ['still don\'t get it','tried everything','been trying','hours and still',
-        'can\'t understand','not getting it','makes no sense','useless','waste of time',
-        'giving up','want to give up','hate this','i\'m stupid','so stupid','too hard'],
-      patterns: [/tried.{0,20}(times|again|still)/i,/\d+\s*(hours?|hrs?).{0,10}(still|and)/i],
-      weight: 2
-    },
-    confused: {
-      keywords: ['don\'t understand','do not understand','confused','not clear',
-        'explain again','can you re-explain','didn\'t get that','lost me',
-        'went over my head','too fast','i\'m lost','huh'],
-      patterns: [/explain.{0,10}again/i,/don.?t.{0,10}(get|understand)/i],
-      weight: 2
-    },
-    anxious: {
-      keywords: ['worried','nervous','scared','anxiety','anxious','what if i fail',
-        'going to fail','stressed','pressure','overwhelming','overwhelmed',
-        'can\'t focus','family pressure','parents will'],
-      patterns: [/what if.{0,20}fail/i,/going to fail/i],
-      weight: 2
-    },
-    demotivated: {
-      keywords: ['what\'s the point','why study','why even bother','no motivation',
-        'not motivated','don\'t feel like','feeling lazy','procrastinating',
-        'nothing matters','bored','i quit','i give up'],
-      patterns: [/why (even|should i|bother)/i,/what.s the point/i],
-      weight: 2
-    },
-    excited: {
-      keywords: ['this is amazing','so cool','love this','finally understand','got it!',
-        'oh wow','makes sense now','it clicked','mind blown','this is so interesting'],
-      patterns: [/finally.{0,10}(get|understand|got)/i,/makes.{0,10}sense.{0,10}now/i],
-      weight: 2
-    },
-    confident: {
-      keywords: ['got it','understood','i get it','clear now','makes sense',
-        'ready for next','what\'s next','next topic','give me harder','challenge me'],
-      patterns: [/what.?s next/i,/(understood|got it|clear now)/i],
-      weight: 1
-    },
-    tired: {
-      keywords: ['tired','exhausted','sleepy','can\'t focus','losing focus',
-        'need a break','been studying all day','burnout','drained','no energy'],
-      patterns: [/studied.{0,20}(all day|hours|long)/i,/need.{0,10}break/i],
-      weight: 2
-    }
-  };
-
-  for (const [emotion, config] of Object.entries(signals)) {
-    let score = 0;
-    for (const keyword of config.keywords) {
-      if (msg.includes(keyword)) score += config.weight;
-    }
-    for (const pattern of config.patterns) {
-      if (pattern.test(msg)) score += config.weight * 1.5;
-    }
-    if (score > 0) scores[emotion] = score;
-  }
-
-  // Short message = likely confused
-  const wordCount = msg.split(' ').length;
-  if (wordCount <= 3 && !scores.confident) {
-    scores.confused = (scores.confused || 0) + 1;
-  }
-
-  // ALL CAPS = panicked or frustrated
-  const capsRatio = (message.match(/[A-Z]/g) || []).length / message.length;
-  if (capsRatio > 0.5 && message.length > 5) {
-    scores.panicked  = (scores.panicked  || 0) + 2;
-    scores.frustrated = (scores.frustrated || 0) + 1;
-  }
-
-  // Repeated confusion in history = frustrated
-  if (history.length >= 2) {
-    const recentMsgs = history.slice(-4).map(m => (m.content || '').toLowerCase());
-    const confusedCount = recentMsgs.filter(m =>
-      m.includes('don\'t understand') || m.includes('confused') || m.includes('explain again')
-    ).length;
-    if (confusedCount >= 2) scores.frustrated = (scores.frustrated || 0) + 3;
-  }
-
-  const dominantEmotion = Object.keys(scores).length > 0
-    ? Object.keys(scores).reduce((a, b) => scores[a] > scores[b] ? a : b)
-    : 'neutral';
-
-  const maxScore = scores[dominantEmotion] || 0;
-  const confidence = Math.min(Math.round((maxScore / 6) * 100), 100);
-
-  const adjustmentMap = {
-    panicked:     { tone: 'calm and urgent',         specialInstruction: 'Start with: "Okay, let\'s focus. Here\'s exactly what you need right now..." Give top 5 key points only. No deep diving.' },
-    frustrated:   { tone: 'empathetic and patient',  specialInstruction: 'Acknowledge their struggle first. Then try a COMPLETELY different angle - new analogy, new example.' },
-    confused:     { tone: 'gentle and clear',         specialInstruction: 'Go back to absolute basics. One concept at a time. Smaller steps. Simpler language.' },
-    anxious:      { tone: 'warm and reassuring',      specialInstruction: 'Address the anxiety in first 2 sentences before any content. Normalise the feeling.' },
-    demotivated:  { tone: 'energising',               specialInstruction: 'Connect this topic to their actual goal first. Make it relevant before explaining.' },
-    excited:      { tone: 'energetic and expansive',  specialInstruction: 'Match their energy! Then take them one level deeper than they expected.' },
-    confident:    { tone: 'peer-level',               specialInstruction: 'Validate quickly then raise the bar: "Great - now try this harder version..."' },
-    tired:        { tone: 'gentle and concise',       specialInstruction: 'Keep response short. End with a rest suggestion.' },
-    neutral:      { tone: 'warm and engaging',        specialInstruction: '' }
-  };
-
-  return {
-    emotion: dominantEmotion,
-    confidence,
-    adjustments: adjustmentMap[dominantEmotion] || adjustmentMap.neutral,
-    detected: dominantEmotion !== 'neutral' && confidence >= 30
-  };
-}
-
-// -------------------------------------------------------------
-// SEARCH WEB VIA TAVILY
-// Called for current affairs, news, exam notifications etc.
-// -------------------------------------------------------------
-async function searchWeb(query) {
-  try {
-    const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
-    console.log('[KEY] TAVILY_API_KEY exists:', !!TAVILY_API_KEY);
-    if (!TAVILY_API_KEY) return '';
-
-    // Always inject current date into search - solid time compass
-    const now   = new Date();
-    const year  = now.getFullYear();
-    const month = now.toLocaleString('en-US', { month: 'long' });
-    const day   = now.getDate();
-    const dateStr = now.toLocaleDateString('en-US', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
-
-    // Resolve relative time words into absolute dates before searching
-    let resolvedQuery = query
-      .replace(/\btoday\b/gi,     `${month} ${day} ${year}`)
-      .replace(/\byesterday\b/gi, (() => { const d = new Date(now); d.setDate(day-1); return d.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}); })())
-      .replace(/\bthis year\b/gi, year.toString())
-      .replace(/\blast year\b/gi, (year-1).toString())
-      .replace(/\bthis week\b/gi, `week of ${month} ${year}`)
-      .replace(/\blast month\b/gi, (() => { const d = new Date(now); d.setMonth(d.getMonth()-1); return d.toLocaleString('en-US',{month:'long',year:'numeric'}); })());
-
-    // Always append year to anchor results - prevents returning old data
-    // But if query already has a year (e.g. last year = 2025), don't append current year
-    const hasAnyYear = /20[0-9]{2}/.test(resolvedQuery);
-    const enrichedQuery = hasAnyYear
-      ? resolvedQuery
-      : `${resolvedQuery} ${year}`;
-
-    console.log('[SEARCH] Tavily query:', enrichedQuery);
-
-    const res = await fetch('https://api.tavily.com/search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        api_key: TAVILY_API_KEY,
-        query: enrichedQuery,
-        search_depth: 'advanced',  // deeper crawl for accuracy
-        max_results: 5,
-        include_answer: true,
-        topic: 'news'  // prioritise fresh news with date metadata
-      })
-    });
-
-    const data = await res.json();
-    if (!res.ok || !data.results) return '';
-
-    const results = data.results || [];
-
-    // Filter out results that reference wrong years
-    const currentYear = year.toString();
-    const freshResults = results.filter(r => {
-      const text = (r.title + r.content).toLowerCase();
-      // Keep if it has current year OR no year reference
-      return text.includes(currentYear) || !/(202[0-9])/.test(text) || true;
-    });
-
-    let context = `TODAY'S DATE: ${dateStr}
-LIVE WEB SEARCH RESULTS for: "${query}"
-
-`;
-
-    if (data.answer) {
-      context += `DIRECT ANSWER: ${data.answer}
-
-`;
-    }
-
-    context += `SOURCES (prioritise results mentioning ${year}):
-`;
-    (freshResults.length > 0 ? freshResults : results).slice(0, 4).forEach((r, i) => {
-      const publishedDate = r.published_date ? ` [Published: ${r.published_date}]` : '';
-      context += `[${i+1}] ${r.title}${publishedDate}\n${(r.content || '').slice(0, 500)}\nURL: ${r.url}\n\n`;
-    });
-
-    return context;
-
-  } catch (err) {
-    console.warn('Web search failed (non-critical):', err.message);
-    return '';
-  }
-}
-
-// -------------------------------------------------------------
-// BUILD THE COMPLETE TEACHING PROMPT
-// This is the heart of MentorAI
-// -------------------------------------------------------------
-function buildTeachingPrompt(baseSystem, student, ragContext, intent, webContext = '', ragNoContent = false) {
-
-  const styleInstructions = {
-    visual: `TEACHING STYLE - VISUAL LEARNER:
-* Start by painting a clear mental image: "Picture this..." or "Imagine you can see..."
-* Use diagrams described in words: arrows, boxes, relationships
-* Use tables to compare concepts side by side
-* Make the invisible visible - describe what things LOOK like`,
-
-    hands_on: `TEACHING STYLE - HANDS-ON LEARNER:
-* Start with something they can DO right now: "Try this...", "Do this experiment..."
-* Give the experience FIRST - concept explanation comes AFTER they feel it
-* Connect every abstract idea to something physical, touchable, testable
-* Examples: coins, everyday objects, their own body, things at home`,
-
-    story: `TEACHING STYLE - STORY LEARNER:
-* Start with a story, real person, or historical moment - ALWAYS
-* "In 1687, Newton was sitting..." / "Imagine you are a merchant in Venice..."
-* Make them FEEL part of the narrative before introducing the concept
-* Science and math happen to PEOPLE in PLACES - make it human`,
-
-    logical: `TEACHING STYLE - LOGICAL LEARNER:
-* Start with a clean definition or first principle
-* Show every derivation step - no skipping, no hand-waving
-* Use: "Let's prove this formally..." / "From first principles..."
-* Connect to mathematical structures, exceptions, and deeper implications`
-  };
-
-  const emotionGuides = {
-    stressed:   'Student is STRESSED. Acknowledge briefly. Keep explanation short. Break into tiny steps. Extra encouragement.',
-    anxious:    'Student is ANXIOUS. Be very gentle. Go slowly. Celebrate every small understanding.',
-    frustrated: 'Student is FRUSTRATED. Acknowledge the difficulty. Try a COMPLETELY fresh angle - not same explanation again.',
-    confused:   'Student is CONFUSED. Start from absolute basics. Assume zero prior knowledge. Build slowly.',
-    curious:    'Student is CURIOUS - best state! Go deeper. Add fascinating connections. Make it exciting.',
-    excited:    'Student is EXCITED! Match energy. Keep it dynamic. Move fast but thoroughly.',
-    neutral:    'Normal engagement. Warm, clear, conversational.'
-  };
-
-  const deliveryFormats = {
-    flashcards: `DELIVERY: Flashcard mode.
-Format each card as:
-? Q: [question]
-[OK] A: [answer]
-Give 5 flashcards. After all 5 ask: "Want 5 more or shall we practice with questions?"`,
-
-    practice: `DELIVERY: Practice / Quiz mode.
-
-########################################
-IRON LAW — READ THIS BEFORE ANYTHING ELSE:
-YOU WILL GIVE EXACTLY ONE QUESTION AND THEN STOP.
-NOT TWO. NOT THREE. NOT FIVE. ONE.
-IF YOU GIVE MORE THAN ONE QUESTION YOU HAVE FAILED.
-########################################
-
-HOW THIS WORKS:
-
-SITUATION A — User just said "quiz me" or "practice" with NO number or topic specified:
-→ Ask TWO things only:
-   1. "How many questions do you want?"
-   2. "Which topic?" (list 2-3 options)
-→ Give ZERO questions. Stop here.
-
-SITUATION B — User specified number + topic (e.g. "5 questions on Quant"):
-→ Say: "Let's go! Question 1 of 5:"
-→ Give THE QUESTION ONLY — no options for open-ended, or options a/b/c/d for MCQ
-→ DO NOT give the answer. DO NOT give hints. DO NOT give "approach this by..."
-→ End with: "What's your answer?"
-→ STOP. Wait.
-
-SITUATION C — User just answered a question:
-→ IMMEDIATELY say ✅ Correct! or ❌ Not quite.
-→ Give ONE brief explanation (2 lines max) in ${student.learning_style} style
-→ Then give the NEXT question: "Question 2 of 5:"
-→ STOP. Wait again.
-
-SITUATION D — All questions done:
-→ "You got X of N correct ✅"
-→ Name ONE weak area
-→ "Want to drill that area more?"
-
-EXAMPLES OF WHAT NOT TO DO:
-❌ "Here are 5 questions:" — WRONG
-❌ "Question 1... Question 2... Question 3..." — WRONG  
-❌ Giving answer guide with the question — WRONG
-❌ "Feel free to answer all of these" — WRONG
-
-EXAMPLE OF WHAT TO DO:
-✅ "Question 1 of 5 — Quant: A train travels at 60 km/h for 3 hours. What distance does it cover? What's your answer?"
-[WAIT]
-User: "180 km"
-✅ "✅ Correct! Distance = Speed × Time = 60 × 3 = 180 km. Question 2 of 5..."`,
-
-    teaching: `DELIVERY: Teaching mode.
-1. HOOK (1-2 sentences in their learning style - grab attention)
-2. CORE CONCEPT (explained in their style - not textbook language)
-3. REAL WORLD CONNECTION (something they can relate to personally)
-4. CHECK IN: End with "Does that click? Or should we try a different angle?"
-
-IMPORTANT: If teaching a concept that has a practice element, explain FIRST.
-Then ask: "Want to try a practice question on this?"
-NEVER give a practice question AND its answer in the same message.`,
-
-    emotional_support: `DELIVERY: Emotional support mode.
-1. ACKNOWLEDGE - reflect back exactly what they said they're feeling
-2. NORMALISE - tell them this is common, they're not alone
-3. REFRAME - one perspective shift
-4. GENTLE NEXT STEP - one tiny action they can take right now
-Never jump to solutions before they feel heard.`,
-
-    exam_panic: `DELIVERY: Exam panic mode. TIME IS CRITICAL.
-1. ONE calm sentence: acknowledge the pressure
-2. "Here's your game plan for the next [X] hours:"
-3. Top 5 most important topics ONLY - no more
-4. For each topic: ONE key formula/concept in one line
-5. End with: "You've got this. Focus beats panic every time."
-Keep entire response under 200 words. No deep explanations.`,
-
-    summary: `DELIVERY: Summary mode.
-Give a clean, scannable summary:
-[PIN] KEY POINTS (3-5 bullets max)
-[TARGET] CORE IDEA (one sentence)
-[IDEA] REMEMBER THIS (one memorable hook)`,
-
-    study_plan: `DELIVERY: Study plan mode.
-Build a realistic plan:
-[CAL] TIMELINE: [based on their exam/goal]
-[BOOK] WEEK BY WEEK breakdown
-? DAILY time commitment (be realistic, not aspirational)
-[OK] MILESTONES to track progress
-Start by asking: what's your exam date and daily available hours?`,
-
-    comparison: `DELIVERY: Comparison mode.
-Use a clear table or parallel structure:
-[CONCEPT A] vs [CONCEPT B]
-- Key difference 1
-- Key difference 2  
-- When to use which
-End with a memory trick to never confuse them again.`,
-
-    check_answer: `DELIVERY: Answer check mode.
-1. Confirm if their answer is correct or not - IMMEDIATELY and DIRECTLY (✅ or ❌)
-2. Give brief explanation in their learning style (2-3 lines max)
-3. If in a quiz sequence: give the NEXT question automatically
-4. If wrong: show exactly where they went wrong (not just the right answer)
-5. Keep momentum — do not over-explain between questions`,
-
-    conversation: `DELIVERY: Conversational mode.
-Respond naturally and warmly. No teaching structure needed.
-Keep it brief and human. Ask what they want to work on next.`,
-
-    socratic_intake: `DELIVERY: Socratic Intake mode.
-The student shared a HIGH-STAKES situation. Do NOT jump to advice yet.
-Diagnose before you prescribe - like a smart mentor would.
-
-RULES:
-1. Acknowledge their situation in ONE warm sentence - genuine, not generic
-2. Ask ONLY 1 question - the single most important one right now
-3. Occasionally 2 if they are very short and flow as one natural thought
-4. NEVER ask 3 or more questions - ever. It feels like a job application form.
-5. After they answer - ask the NEXT most important question if still needed
-6. Once you have enough context - stop asking and help fully
-
-HOW TO PICK THE ONE RIGHT QUESTION:
-- Interview -> "What company is it for?" - everything else flows from that
-- Exam -> "Which subject is worrying you most?"
-- Presentation -> "Who is the audience?"
-- Want to learn -> "What is driving this - a specific job goal or general curiosity?"
-- Stuck/lost -> "What area feels most unclear right now - career, studies, or something personal?"
-- Startup idea -> "Tell me the idea in one line"
-- Job offer -> "What are the two options you are choosing between?"
-
-TONE: Like a smart friend who genuinely wants to understand - not a chatbot running a script.
-
-GOOD EXAMPLE:
-Student: "I have a Python interview tomorrow"
-You: "Nice - which company is it for?"
-[Wait. Then next question based on their answer.]
-
-BAD EXAMPLE - NEVER do this:
-"What company, what role, what topics are covered, how many hours do you have, and what is your current Python level?"
-That is an interrogation. Not mentoring.`
-  };
-
-  const deliveryFormat = deliveryFormats[intent.mode] || deliveryFormats[intent.content_type] || deliveryFormats.teaching;
-  const styleGuide     = styleInstructions[student.learning_style] || styleInstructions.visual;
-  const emotionGuide   = emotionGuides[student.emotion?.toLowerCase()] || emotionGuides.neutral;
-  const specialInstruction = student.emotionAdjustments?.specialInstruction || '';
-
-  // Build personality context string for injection
-  const personalityContext = `
-========================================
-RULE 1 — READ THIS BEFORE ANYTHING ELSE
-========================================
-You are a mentor, not a search engine.
-
-BEFORE giving any plan, explanation, or advice — you must know:
-1. HOW MUCH TIME the student has (exam date, deadline, hours per day)
-2. WHAT SPECIFICALLY is confusing or needed
-3. THEIR CURRENT LEVEL (beginner, some knowledge, advanced)
-
-If ANY of these 3 are missing — ask ONE question to find out.
-Do NOT give a plan. Do NOT explain. Just ask.
-
-ONLY when you know all 3 — give a precise, personalised response.
-
-Examples:
-- "Help me with CBSE Maths" → Ask: "When is your exam? And which chapter is troubling you most?"
-- "I want to prepare for GMAT" → Ask: "Starting fresh or studied before? What's your target score?"
-- "I have a doubt in physics" → Ask: "Which topic? What specifically is confusing?"
-- "Make me a study plan" → Ask: "How much time do you have daily? And when is the deadline?"
-
-One question. Wait. Then help.
-========================================
-
-========================================
-WHO YOU ARE TALKING TO
-========================================
-You are talking to ${student.name}.
-
-THEIR PERSONALITY: ${student.personality}${student.mbti_type ? ` (${student.mbti_type})` : ''}
-${student.personality_desc ? `What this means: ${student.personality_desc}` : ''}
-
-HOW THEY LEARN: ${student.learning_style.toUpperCase()}
-${student.learning_style === 'hands_on' ? '→ They learn by DOING. Never explain theory first. Give them something to do, try, or build. Theory comes after the experience.' : ''}
-${student.learning_style === 'visual' ? '→ They need to SEE it. Use diagrams described in words, mental images, visual comparisons.' : ''}
-${student.learning_style === 'story' ? '→ They need a STORY first. Real person, real situation, real outcome. Then the concept.' : ''}
-${student.learning_style === 'logical' ? '→ They need FIRST PRINCIPLES. Definition first, then derivation, then application.' : ''}
-
-WHAT DRIVES THEM: ${student.motivators && student.motivators.length > 0 ? student.motivators.join(', ') : 'achievement'}
-THEIR GOAL: ${student.exam_target || 'Not specified'}
-THEIR CURRENT EMOTION: ${student.emotion}
-MENTOR STYLE THEY CHOSE: ${student.persona || 'friend'} — speak in THAT voice
-
-THE MOST IMPORTANT RULE:
-Before you write anything — ask yourself:
-"Given that ${student.name} is ${student.personality} who learns by ${student.learning_style} — 
-what does THIS specific person need to hear right now?
-Not what any student needs. What ${student.name} needs."
-
-If your response could be sent to ANY student — rewrite it.
-It must only make sense for ${student.name}.
-========================================`;
-
-  let prompt = `${personalityContext}
-
-${baseSystem}
-
-========================================
-STUDENT PROFILE
-========================================
-Name: ${student.name}
-Persona Selected: ${student.persona || 'friend'} <- SPEAK IN THIS PERSONA'S VOICE
-Personality Type: ${student.personality}${student.mbti_type ? ` (MBTI: ${student.mbti_type})` : ''}
-Personality Description: ${student.personality_desc || 'A motivated learner ready to grow'}
-Learning Style: ${student.learning_style.toUpperCase()} <- MOST IMPORTANT — ALWAYS USE THIS
-Primary Interest: ${student.primary_interest || 'Not yet mapped'}
-EQ Strength: ${student.eq_strength || 'Developing'}
-Key Motivators: ${student.motivators && student.motivators.length > 0 ? student.motivators.join(', ') : 'Not yet mapped'}
-Level: ${student.level}
-Goal: ${student.exam_target}
-Timeline: ${student.timeline || 'Not specified'}
-Emotion Right Now: ${student.emotion}
-Weak Areas: ${student.weak_subjects.join(', ') || 'None specified'}
-Strong Areas: ${student.strong_subjects.join(', ') || 'None specified'}
-
-PERSONALISATION INSTRUCTION:
-Speak to ${student.name} as ${student.personality} with ${student.learning_style} learning style.
-They chose ${student.persona} as their mentor style — match that voice exactly.
-Every response must feel tailored to THIS person, not generic advice anyone could Google.${student.memory ? `
-
-========================================
-LONG-TERM MEMORY - WHAT YOU KNOW ABOUT THIS STUDENT
-========================================
-Goal: ${student.memory.goal || 'Not specified'}
-Known Weak Areas: ${(student.memory.weak_areas || []).join(', ') || 'None yet'}
-Known Strong Areas: ${(student.memory.strong_areas || []).join(', ') || 'None yet'}
-Last Topic Covered: ${student.memory.last_topic || 'First session'}
-Last Session: ${student.memory.last_session_summary || 'No previous session'}
-Pending Followup: ${student.memory.pending_followup || 'None'}
-Study Pattern: ${student.memory.study_pattern || 'Unknown yet'}
-Context: ${student.memory.total_sessions_context || 'New student'}
-
-USE THIS MEMORY: Reference it naturally. Continue from where they left off. Never ask things you already know.` : ''}
-
-========================================
-EMOTION GUIDANCE
-========================================
-${emotionGuide}
-
-========================================
-${styleGuide}
-
-========================================
-${deliveryFormat}
-========================================
-
-========================================
-THE CHANAKYA PROTOCOL — FOLLOW BEFORE EVERY RESPONSE
-========================================
-Before generating a single word, run these 7 steps silently:
-
-1. READ — Parse the message for explicit content, implicit emotion, and subtext. What is really being asked?
-2. FEEL — Determine emotional state. Tag it: [crisis / frustrated / confused / anxious / excited / neutral]. This changes everything.
-3. REMEMBER — Pull the personality profile. How does THIS specific person need to receive this right now?
-4. SEARCH — RAG context has been provided. If web search data exists, use it. Synthesise — never just retrieve.
-5. SYNTHESISE — Select the single most useful insight. Discard everything else. One perfect answer beats ten average ones.
-6. DOUBT-CHECK — Is anything ambiguous? If two interpretations are equally plausible, ASK. Never guess on something that matters. Max 2 questions. Never more.
-7. COMPOSE — Build the response: emotion acknowledged first → insight second → action third.
-
-========================================
-PERSONALITY MIRRORING — CRITICAL
-========================================
-You do not have a fixed voice. You become the voice this person trusts.
-Read their writing style and mirror it:
-- Short sentences, direct words → be equally direct and brief
-- Long reflective messages → match depth and thoughtfulness
-- Story references, metaphors → respond with stories and metaphors
-- Technical language → be precise and technical back
-- Informal, casual → be warm and conversational
-
-The user never sees the machinery. They experience a presence that feels like it has known them their whole life.
-
-========================================
-MODE DETECTION — AUTO-ACTIVATE
-========================================
-Detect the user's context and shift mode automatically:
-
-STUDENT MODE (school/exam context detected):
-- Speak like a brilliant older sibling, not a teacher
-- Never make them feel stupid. Ever.
-- Acknowledge effort before explaining the gap
-- Visual learner → diagram or analogy FIRST, always
-- Metacognitive block (cannot identify confusion) → build whole picture first, do NOT ask what they don't understand
-- Exam pressure → distil to 5 high-probability points maximum. Then: one active recall task. Then: tell them to rest.
-- Age-appropriate language always. No adult framing.
-
-ENTREPRENEUR MODE (founder/startup context detected):
-- Acknowledge ALL losses before ANY solution — solutions given before acknowledgment are rejected
-- Never give generic advice that could apply to anyone
-- Real founder stories FIRST — named people, real outcomes, real numbers
-- When co-founder issues arise: force clarity — final decision or tension that can be resolved?
-- When funding issues arise: reframe attribution — systemic failure ≠ personal failure
-- One action at a time. Never overwhelm with a full plan unprompted.
-
-CAREER TRANSITION MODE (job change/skill gap detected):
-- Reframe the conversation: not "trying harder" but "trying differently"
-- Connect new knowledge to something they already know — always
-- When correcting wrong answers: lead with what was RIGHT first
-- Wrong answers are data, not failures — never shame them
-- If overwhelmed: reduce scope immediately, do not push through
-- If on a streak: increase challenge, do not plateau them
-- End each session: ONE specific action for tomorrow. Never more than one.
-
-========================================
-EMOTION-FIRST RULE — NON-NEGOTIABLE
-========================================
-No response is generated until the emotional state is acknowledged.
-An analytically correct answer given to an emotionally unready person is wasted counsel.
-
-- Crisis / multi-stressor overload → Acknowledge ALL losses first. Then and only then: solutions.
-- Frustration → "I hear that this is hard" BEFORE any explanation
-- Confusion → "This makes sense to be confused about" BEFORE any content
-- Excitement → Match the energy immediately
-- Neutral → Proceed directly, warmly
-
-The acknowledgment does not need to be long. One sentence is enough. But it must come first.
-
-========================================
-DOUBT PROTOCOL — WHEN TO ASK
-========================================
-If the problem domain has two or more equally plausible interpretations:
-→ DO NOT guess. Ask.
-→ Maximum 2 questions. Never more. Never vague.
-→ Frame as natural conversation, not interrogation.
-→ Ask only what you genuinely need to serve better.
-
-GOOD: "Before I go further — is this a final decision or still something that could be worked through?"
-BAD: "Can you tell me more about your situation, your goals, your timeline, and what you've tried so far?"
-
-========================================
-COMMUNICATION STYLE - NON-NEGOTIABLE
-========================================
-- NEVER use: "certainly", "absolutely", "great question", "of course", "sure thing", "happy to help", "definitely", "fantastic"
-- NEVER start with a compliment about the question
-- NEVER start with a textbook definition
-- Every word earns its place — if it doesn't add value, cut it
-- Speak with authority but stay human and warm
-- NEVER say "I don't have access to real-time data" — you have live web search. USE IT.
-- If web search results are provided — USE THEM. Always.
-
-NON-NEGOTIABLE RULES:
-1. ALWAYS start with their learning style hook
-2. Use ${student.name}'s name at least once naturally
-3. If confused — try a COMPLETELY DIFFERENT angle, not the same explanation
-4. You are their personal mentor — warm, patient, specific to THEM
-5. Keep responses focused — one insight at a time
-
-CONVERSATION vs CONTENT:
-Short message (under 15 words, no explicit request) → 2-3 lines MAX. Ask ONE question. Never dump information.
-Explicit content request ("explain", "give me questions", "make a plan") → Give the full structured response.
-
-RESPONSE LENGTH:
-- Message under 10 words → reply under 40 words. No exceptions.
-- Casual message → 1-2 sentences only.
-- Match their energy. Short in, short out.
-- Crisis mode → halve response length. Double warmth.
-- Strategy mode → precise, direct, data-informed.`;
-
-if (ragContext) {
-    prompt += `
-========================================
-PRIMARY KNOWLEDGE SOURCE (FROM STUDENT PDF)
-========================================
-The following information was retrieved from the student's uploaded documents. You MUST prioritize this content over your general training data:
-
-${ragContext}
-
-[WARN]? USE the knowledge above as your source.
-[WARN]? TRANSFORM it into ${student.name}'s learning style - do NOT copy verbatim.
-[WARN]? Deliver it the way a ${student.learning_style} learner needs it.
-
-INSTRUCTIONS:
-1. Use the specific facts and data from the source above as your absolute source of truth.
-2. Transform this technical content into a ${student.learning_style} explanation.
-3. Do not mention "The database" or "Source 1"; present it as your own expert knowledge.
-4. If the data above contradicts your training data, follow the data above.`;
-  } else if (ragNoContent) {
-    // Knowledge base was searched but returned nothing relevant
-    // Tell AI to use general knowledge rather than making up specifics
-    prompt += `
-========================================
-KNOWLEDGE BASE: NO RELEVANT CONTENT FOUND
-========================================
-The student's uploaded documents were searched but no relevant content was found for this query.
-Use your general training knowledge to answer.
-Do NOT make up specific facts, page numbers, chapter references, or claim content exists in their documents.
-Answer from your general knowledge as a knowledgeable mentor.`;
-  }
-  
-
-  // Quiz interceptor — OVERRIDE to enforce one question at a time
-  if (intent._quizInstruction) {
-    return `You are ${student.name}'s personal mentor running a quiz session.
-
-${intent._quizInstruction}
-
-Student name: ${student.name}
-Learning style: ${student.learning_style}
-Topic: ${intent.subject || 'the requested subject'}
-
-ABSOLUTE RULE: Give exactly ONE question. Wait for their answer. Nothing else.`;
-  }
-
-  // Socratic intake - OVERRIDE everything with a simple, laser-focused prompt
-  if (intent._socraticInstruction) {
-    return `You are ${student.name}'s personal mentor. You are in the middle of understanding their situation before giving advice.
-
-Your ONLY task right now: Ask this one question naturally - "${intent._socraticInstruction}"
-
-Rules:
-- ONE sentence acknowledging what they said (optional, only if natural)
-- Then ask the question - warm, direct, like a friend
-- STOP. Nothing else.
-- No bullet points. No tips. No preparation advice. No lists.
-- Maximum 2 sentences total.`;
-  }
-
-  // Inject emotion-based instruction if detected with confidence
-  if (specialInstruction) {
-    prompt += `
-
-========================================
-EMOTION DETECTED: ${student.emotion.toUpperCase()}
-========================================
-PRIORITY INSTRUCTION FOR THIS RESPONSE: ${specialInstruction}
-This overrides your default response style for this one message.`;
-  }
-
-  return prompt;
-}
-
-// -------------------------------------------------------------
-// AI MODEL CALLS
-// -------------------------------------------------------------
-// ─────────────────────────────────────────────────────────────
-// SMART MODEL ROUTER
-// ─────────────────────────────────────────────────────────────
-
-// Count today's premium messages for this user from Supabase
-async function countPremiumMessagesToday(userId, supabaseUrl, supabaseKey) {
-  if (!userId || !supabaseUrl || !supabaseKey) return 0;
-  try {
-    const todayIST = new Date();
-    todayIST.setHours(0, 0, 0, 0);
-    const startUTC = new Date(todayIST.getTime() - (5.5 * 60 * 60 * 1000)).toISOString();
-    const url = `${supabaseUrl}/rest/v1/chat_messages?user_id=eq.${userId}&is_premium=eq.true&created_at=gte.${startUTC}&select=id`;
-    const res = await fetch(url, {
-      headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
-    });
-    const data = await res.json();
-    return Array.isArray(data) ? data.length : 0;
-  } catch(e) {
-    console.warn('[RATE-LIMIT] Count failed (non-critical):', e.message);
-    return 0;
-  }
-}
-
-// Select best model based on message intent + premium availability
-function selectBestModel(message, intent, emotionData, webContext, premiumAllowed) {
-  const msg = message.toLowerCase();
-
-  // ── PREMIUM ROUTING (when within 20/day limit) ─────────────
-  if (premiumAllowed) {
-
-    // Emotional support → Claude is best for empathy + nuance
-    if (
-      emotionData.detected &&
-      ['panicked','frustrated','anxious','stressed','demotivated','tired'].includes(emotionData.emotion)
-    ) {
-      return { model: 'claude-sonnet-4-6', isPremium: true, reason: 'Emotional support → Claude' };
-    }
-
-    // Life advice, career guidance, deep personal questions → Claude
-    if (intent.mode === 'emotional_support' || intent.mode === 'socratic_intake') {
-      return { model: 'claude-sonnet-4-6', isPremium: true, reason: 'Life/career guidance → Claude' };
-    }
-
-    // Complex explanation, study plan, exam prep → GPT-4o
-    if (
-      intent.mode === 'teaching' ||
-      intent.mode === 'study_plan' ||
-      intent.mode === 'exam_panic' ||
-      intent.mode === 'comparison' ||
-      intent.needsKnowledge
-    ) {
-      return { model: 'gpt-4o', isPremium: true, reason: 'Deep teaching → GPT-4o' };
-    }
-
-    // Practice questions, check answer → GPT-4o
-    if (intent.mode === 'practice' || intent.mode === 'check_answer') {
-      return { model: 'gpt-4o', isPremium: true, reason: 'Practice/evaluation → GPT-4o' };
-    }
-  }
-
-  // ── FREE ROUTING (after limit OR simple questions) ──────────
-
-  // Web search needed → Gemini Flash (best for current affairs)
-  if (intent.needsWebSearch || webContext) {
-    return { model: 'gemini-1.5-flash', isPremium: false, reason: 'Web/current affairs → Gemini Flash' };
-  }
-
-  // Math, coding, reasoning → DeepSeek (best free for logic)
-  const mathSignals = ['math','maths','calculus','algebra','geometry','equation','solve','proof',
-    'code','python','javascript','algorithm','programming','debug','error in code'];
-  if (mathSignals.some(k => msg.includes(k))) {
-    return { model: 'deepseek-chat', isPremium: false, reason: 'Math/coding → DeepSeek' };
-  }
-
-  // Summary, flashcards, quick revision → Groq Llama (fast + free)
-  if (
-    intent.mode === 'flashcards' ||
-    intent.mode === 'summary' ||
-    intent.mode === 'conversation'
-  ) {
-    return { model: 'llama-3.3-70b-versatile', isPremium: false, reason: 'Quick/conversational → Groq Llama' };
-  }
-
-  // Default free → Groq Llama 3.3 70B (capable + fast)
-  return { model: 'llama-3.3-70b-versatile', isPremium: false, reason: 'General → Groq Llama' };
-}
-
-// ─────────────────────────────────────────────────────────────
-// MODEL CALLERS
-// ─────────────────────────────────────────────────────────────
-async function callAI(model, messages, system) {
-  // Fallback chain — if primary model fails, try next best, then gpt-4o-mini as final safety net
-  const fallbackChain = {
-    'claude-sonnet-4-6':         ['llama-3.3-70b-versatile', 'gpt-4o-mini'],
-    'claude-3-5-haiku-20241022': ['llama-3.3-70b-versatile', 'gpt-4o-mini'],
-    'gpt-4o':                    ['llama-3.3-70b-versatile', 'gpt-4o-mini'],
-    'gemini-1.5-flash':          ['llama-3.3-70b-versatile', 'gpt-4o-mini'],
-    'deepseek-chat':             ['llama-3.3-70b-versatile', 'gpt-4o-mini'],
-    'llama-3.3-70b-versatile':   ['gpt-4o-mini'],
-    'gpt-4o-mini':               []
-  };
-
-  const modelsToTry = [model, ...(fallbackChain[model] || ['gpt-4o-mini'])];
-
-  for (const m of modelsToTry) {
-    try {
-      console.log(`[MODEL] Trying: ${m}`);
-      if (m === 'claude-sonnet-4-6')          return await callClaude(messages, system, 'claude-sonnet-4-6');
-      if (m === 'claude-3-5-haiku-20241022')   return await callClaude(messages, system, 'claude-3-5-haiku-20241022');
-      if (m === 'gemini-1.5-flash')            return await callGemini(messages, system);
-      if (m === 'llama-3.3-70b-versatile')     return await callGroq(messages, system, 'llama-3.3-70b-versatile');
-      if (m === 'deepseek-chat')               return await callDeepSeek(messages, system);
-      if (m === 'gpt-4o-mini')                 return await callOpenAI(messages, system, 'gpt-4o-mini');
-      return await callOpenAI(messages, system, 'gpt-4o');
-    } catch (err) {
-      console.warn(`[MODEL] ${m} failed: ${err.message} — trying next fallback`);
-      if (m === modelsToTry[modelsToTry.length - 1]) {
-        // All fallbacks exhausted — throw final error
-        throw new Error(`All models failed. Last error: ${err.message}`);
-      }
-      // Continue to next model in chain
-    }
-  }
-}
-
-async function callOpenAI(messages, system, modelName = 'gpt-4o') {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) throw new Error('OPENAI_API_KEY not configured');
-
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-    body: JSON.stringify({
-      model: modelName,
-      messages: [{ role: 'system', content: system }, ...messages],
-      max_tokens: 1200,
-      temperature: 0.7
+    from: ()=>({
+      select: ()=>({ eq: ()=>({ single: async()=>({data:null,error:true}), order: ()=>({ limit: async()=>({data:[],error:null}) }) }) }),
+      upsert: async()=>({error:null}),
+      insert: async()=>({error:null})
     })
-  });
-
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message);
-  return { content: data.choices[0].message.content, model: modelName, usage: data.usage };
+  };
 }
 
-async function callClaude(messages, system, modelName = 'claude-sonnet-4-6') {
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) throw new Error('ANTHROPIC_API_KEY not configured');
-
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: modelName, max_tokens: 1200, system, messages })
-  });
-
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message);
-  return { content: data.content[0].text, model: modelName, usage: data.usage };
+// -- AUTH TAB SWITCH ------------------------------------------
+function switchTab(mode){
+  const isLogin = mode === 'login';
+  document.getElementById('tab-login').classList.toggle('active', isLogin);
+  document.getElementById('tab-signup').classList.toggle('active', !isLogin);
+  document.getElementById('signup-fields').style.display = isLogin ? 'none' : 'block';
+  document.getElementById('auth-btn').textContent = isLogin ? 'Sign In ->' : 'Create Account ->';
+  document.getElementById('auth-footer').innerHTML = isLogin
+    ? "Don't have an account? <span onclick=\"switchTab('signup')\">Create one free -></span>"
+    : "Already have an account? <span onclick=\"switchTab('login')\">Sign in -></span>";
+  showAuthMsg('', '');
 }
 
-// ── Groq — Llama 3.3 70B (free, fast) ──────────────────────
-async function callGroq(messages, system, modelName = 'llama-3.3-70b-versatile') {
-  const key = process.env.GROQ_API_KEY;
-  if (!key) {
-    console.warn('[GROQ] No API key — falling back to gpt-4o-mini');
-    return callOpenAI(messages, system, 'gpt-4o-mini');
-  }
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-    body: JSON.stringify({
-      model: modelName,
-      messages: [{ role: 'system', content: system }, ...messages],
-      max_tokens: 1200,
-      temperature: 0.7
-    })
-  });
-  const data = await res.json();
-  if (data.error) {
-    console.warn('[GROQ] Error:', data.error.message, '— falling back to gpt-4o-mini');
-    return callOpenAI(messages, system, 'gpt-4o-mini');
-  }
-  return { content: data.choices[0].message.content, model: modelName, usage: data.usage };
+function showAuthMsg(msg, type){
+  const el = document.getElementById('auth-msg');
+  el.textContent = msg;
+  el.className = 'auth-msg ' + type + (msg ? ' show' : '');
 }
 
-// ── DeepSeek — best free for math/reasoning ────────────────
-async function callDeepSeek(messages, system) {
-  const key = process.env.DEEPSEEK_API_KEY;
-  if (!key) {
-    console.warn('[DEEPSEEK] No API key — falling back to gpt-4o-mini');
-    return callOpenAI(messages, system, 'gpt-4o-mini');
-  }
-  const res = await fetch('https://api.deepseek.com/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: [{ role: 'system', content: system }, ...messages],
-      max_tokens: 1200,
-      temperature: 0.7
-    })
-  });
-  const data = await res.json();
-  if (data.error) {
-    console.warn('[DEEPSEEK] Error:', data.error.message, '— falling back to gpt-4o-mini');
-    return callOpenAI(messages, system, 'gpt-4o-mini');
-  }
-  return { content: data.choices[0].message.content, model: 'deepseek-chat', usage: data.usage };
-}
+// -- HANDLE SIGNUP / LOGIN ------------------------------------
+async function handleAuth(){
+  const btn = document.getElementById('auth-btn');
+  const isLogin = document.getElementById('tab-login').classList.contains('active');
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value.trim();
 
-// ─────────────────────────────────────────────────────────────
-// DAILY PATTERN RECOGNITION
-// Detects natural openings to learn more about the student
-// Saves discoveries silently to user_memory.psych_insights
-// Feels like a real mentor — not a quiz
-// ─────────────────────────────────────────────────────────────
-function detectPsychInsight(message, history, emotionData) {
-  const msg = message.toLowerCase().trim();
-  const recentHistory = history.map(m => (m.content||'').toLowerCase()).join(' ');
+  if(!email || !password){ showAuthMsg('Please fill in all fields.', 'err'); return; }
+  if(password.length < 6){ showAuthMsg('Password must be at least 6 characters.', 'err'); return; }
 
-  // Map of triggers → what we learn → key to save
-  const discoveries = [
+  btn.textContent = isLogin ? 'Signing in...' : 'Creating account...';
+  btn.disabled = true;
+  showAuthMsg('', '');
 
-    // Pressure handling
-    {
-      triggers: ['exam tomorrow','exam today','test tomorrow','paper tomorrow','only hours','running out of time'],
-      insight: 'performs under pressure — exam panic triggers detected',
-      key: 'pressure_style:deadline_driven'
-    },
-    {
-      triggers: ['i work better under pressure','i need a deadline','procrastinate until last minute','last minute person'],
-      insight: 'self-identified deadline-driven worker',
-      key: 'pressure_style:needs_deadline'
-    },
-    {
-      triggers: ['i plan everything','i like to plan','plan ahead','schedule it','i make lists'],
-      insight: 'proactive planner — likes structure and preparation',
-      key: 'pressure_style:advance_planner'
-    },
+  try {
+    if(isLogin){
+      // -- SIGN IN --
+      const { data, error } = await sb.auth.signInWithPassword({ email, password });
+      if(error) throw error;
+      currentUser = data.user;
+      await loadUserProfile();
+    } else {
+      // -- SIGN UP --
+      const name = document.getElementById('auth-name').value.trim();
+      const age = document.getElementById('auth-age').value.trim();
+      const gender = document.getElementById('auth-gender').value;
+      if(!name){ showAuthMsg('Please enter your name.', 'err'); btn.disabled=false; btn.textContent='Create Account ->'; return; }
+      if(!age){ showAuthMsg('Please enter your age.', 'err'); btn.disabled=false; btn.textContent='Create Account ->'; return; }
+      if(!gender){ showAuthMsg('Please select your gender.', 'err'); btn.disabled=false; btn.textContent='Create Account ->'; return; }
 
-    // How they react when stuck
-    {
-      triggers: ['i give up','want to quit','too hard','cant do this','not smart enough'],
-      insight: 'tends to catastrophize when stuck — needs reframe before content',
-      key: 'stuck_response:gives_up'
-    },
-    {
-      triggers: ['let me try again','ill figure it out','give me a hint','almost got it'],
-      insight: 'resilient when stuck — pushes through with small nudges',
-      key: 'stuck_response:resilient'
-    },
+      const { data, error } = await sb.auth.signUp({ email, password });
+      if(error) throw error;
 
-    // Learning preference signals
-    {
-      triggers: ['show me an example','give me an example','can you show','real life example'],
-      insight: 'needs examples before theory — kinesthetic/sensing learner signal',
-      key: 'learn_pref:examples_first'
-    },
-    {
-      triggers: ['explain the concept first','what is the theory','how does it work fundamentally','first principles'],
-      insight: 'prefers theory before examples — intuitive learner signal',
-      key: 'learn_pref:theory_first'
-    },
-    {
-      triggers: ['draw it','can you make a diagram','visualize','picture this','show me visually'],
-      insight: 'requests visual representation — strong visual learner',
-      key: 'learn_pref:visual_confirmed'
-    },
-    {
-      triggers: ['step by step','one step at a time','break it down','slowly','smaller steps'],
-      insight: 'needs chunked learning — prefers structured sequential delivery',
-      key: 'learn_pref:chunked_sequential'
-    },
-
-    // Motivation signals
-    {
-      triggers: ['i want to prove','prove to myself','prove everyone wrong','show them'],
-      insight: 'externally motivated — driven by proving themselves to others',
-      key: 'motivation:prove_others'
-    },
-    {
-      triggers: ['i just love learning','i find this fascinating','genuinely curious','this is interesting'],
-      insight: 'intrinsically motivated — loves learning for its own sake',
-      key: 'motivation:intrinsic_curiosity'
-    },
-    {
-      triggers: ['if i fail','what if i fail','scared of failing','fear of failure','cant afford to fail'],
-      insight: 'fear of failure is primary motivator — needs reassurance + reframe',
-      key: 'motivation:fear_of_failure'
-    },
-
-    // Social/collaboration style
-    {
-      triggers: ['i study alone','i prefer studying alone','distraction when others around','need quiet'],
-      insight: 'solo learner — introvert study preference confirmed',
-      key: 'social_style:solo_learner'
-    },
-    {
-      triggers: ['study group','i learn better with others','explaining to someone','teach someone'],
-      insight: 'social learner — learns by explaining and collaborating',
-      key: 'social_style:collaborative_learner'
-    },
-
-    // Emotional intelligence signals
-    {
-      triggers: ['i know im stressed but','i can feel myself getting anxious','i notice when im'],
-      insight: 'high self-awareness — recognizes own emotional states',
-      key: 'eq:high_self_awareness'
-    },
-    {
-      triggers: ['i dont know why im feeling','i just feel off','something feels wrong','dont know whats wrong'],
-      insight: 'lower emotional self-awareness — feelings arrive without clear source',
-      key: 'eq:developing_self_awareness'
-    },
-
-    // Decision making
-    {
-      triggers: ['i overthink','i keep second guessing','analysis paralysis','cant make a decision'],
-      insight: 'overthinking pattern — needs decisive framing and time-boxing',
-      key: 'decision_style:overthinker'
-    },
-    {
-      triggers: ['i just go for it','i decide quickly','trust my gut','follow my instinct'],
-      insight: 'intuitive fast decision maker — needs to slow down for big decisions',
-      key: 'decision_style:gut_driven'
-    }
-  ];
-
-  // Check current message against all triggers
-  for(const discovery of discoveries){
-    if(discovery.triggers.some(t => msg.includes(t))){
-      return { insight: discovery.insight, key: discovery.key };
-    }
-  }
-
-  // Check recent history for patterns (catches things said a message or two ago)
-  for(const discovery of discoveries){
-    if(discovery.triggers.some(t => recentHistory.includes(t))){
-      return { insight: discovery.insight, key: discovery.key };
-    }
-  }
-
-  return { insight: null, key: null };
-}
-
-// ─────────────────────────────────────────────────────────────
-// PROACTIVE MENTOR SYSTEM
-// Detects goal confirmation and triggers personalised email sequences
-// ─────────────────────────────────────────────────────────────
-
-function detectProactiveTrigger(message, history, meta) {
-  const msg = message.toLowerCase().trim();
-
-  // ── HARD FILTER — skip short/casual messages immediately ──
-  // Must be at least 5 words AND contain a goal/topic keyword
-  const wordCount = msg.split(' ').filter(w => w.length > 0).length;
-  if (wordCount < 5) return null;
-
-  const hasGoalKeyword = [
-    'prepare', 'preparation', 'study', 'learn', 'crack', 'clear',
-    'interview', 'exam', 'target', 'goal', 'month', 'week', 'days'
-  ].some(k => msg.includes(k));
-  if (!hasGoalKeyword) return null;
-
-  const recentHistory = history.slice(-6).map(m => (m.content||'').toLowerCase()).join(' ');
-  const combined = msg + ' ' + recentHistory;
-
-  // Goal/exam confirmation signals
-  const goalSignals = [
-    { pattern: /gmat.{0,20}(\d+)\s*month/i,       topic: 'GMAT',          extractDays: m => parseInt(m[1]) * 30 },
-    { pattern: /cat.{0,20}(\d+)\s*month/i,         topic: 'CAT',           extractDays: m => parseInt(m[1]) * 30 },
-    { pattern: /upsc.{0,20}(\d+)\s*month/i,        topic: 'UPSC',          extractDays: m => parseInt(m[1]) * 30 },
-    { pattern: /jee.{0,20}(\d+)\s*month/i,         topic: 'JEE',           extractDays: m => parseInt(m[1]) * 30 },
-    { pattern: /neet.{0,20}(\d+)\s*month/i,        topic: 'NEET',          extractDays: m => parseInt(m[1]) * 30 },
-    { pattern: /interview.{0,20}(\d+)\s*day/i,     topic: 'Interview Prep',extractDays: m => parseInt(m[1]) },
-    { pattern: /interview.{0,10}tomorrow/i,        topic: 'Interview Prep',extractDays: () => 1 },
-    { pattern: /interview.{0,10}(2|two)\s*day/i,   topic: 'Interview Prep',extractDays: () => 2 },
-    { pattern: /ai engineer.{0,20}(\d+)\s*month/i, topic: 'AI Engineering',extractDays: m => parseInt(m[1]) * 30 },
-    { pattern: /product manager.{0,20}(\d+)\s*month/i, topic: 'Product Management', extractDays: m => parseInt(m[1]) * 30 },
-    { pattern: /learn.{0,20}python.{0,20}(\d+)\s*month/i, topic: 'Python', extractDays: m => parseInt(m[1]) * 30 },
-    { pattern: /startup.{0,20}(\d+)\s*month/i,    topic: 'Entrepreneurship', extractDays: m => parseInt(m[1]) * 30 },
-  ];
-
-  // Check if user just confirmed a plan ("yes", "that works", "let's start", etc.)
-  const confirmationSignals = [
-    'yes', 'yeah', 'sure', 'ok', 'okay', 'lets start', 'that works',
-    'sounds good', 'ready', 'lets do it', 'start from tomorrow',
-    'are we ready', 'confirmed', 'im in', 'great lets go'
-  ];
-  const isConfirmation = confirmationSignals.some(s => msg.includes(s));
-
-  // Look for goal in recent history if this is a confirmation
-  if (isConfirmation) {
-    for (const signal of goalSignals) {
-      const match = combined.match(signal.pattern);
-      if (match) {
-        return {
-          goal:          `Prepare for ${signal.topic}`,
-          topic:         signal.topic,
-          timeline_days: signal.extractDays(match),
-          needsEmailConfirm: true
-        };
+      // Get the user object safely
+      currentUser = data.user || (data.session && data.session.user);
+      if(!currentUser){
+        const signin = await sb.auth.signInWithPassword({ email, password });
+        if(signin.error) throw signin.error;
+        currentUser = signin.data.user;
       }
+
+      // Save to profile object
+      profile.name = name;
+      profile.age = age;
+      profile.gender = gender;
+      profile.keys = { claude:'server', openai:'server', gemini:'server' };
+      profile.xp = 0; profile.level = 1; profile.streak = 1;
+      profile.lastVisit = new Date().toDateString();
+
+      // Save to Supabase and wait for confirmation
+      const saveResult = await sb.from('user_profiles').upsert({
+        id: currentUser.id,
+        name: name,
+        age: parseInt(age),
+        gender: gender,
+        persona: 'coach', xp: 0, level: 1, streak: 1,
+        last_visit: new Date().toDateString()
+      });
+      if(saveResult.error) console.error('Profile save error:', saveResult.error);
+      else console.log('New user saved:', name);
+
+      saveProfile();
+      goTo('screen-onboard');
+      initOnboard();
+      return;
     }
-  }
-
-  // Direct goal statement with timeline
-  for (const signal of goalSignals) {
-    const match = msg.match(signal.pattern);
-    if (match) {
-      return {
-        goal:          `Prepare for ${signal.topic}`,
-        topic:         signal.topic,
-        timeline_days: signal.extractDays(match),
-        needsEmailConfirm: true
-      };
-    }
-  }
-
-  return null;
-}
-
-// Create schedule in Supabase and send Day 1 email
-async function triggerProactiveMentor({ userId, userEmail, userName, learningStyle, personality, trigger, supabaseUrl, supabaseKey, baseUrl }) {
-  if (!userId || !userEmail || !trigger) return;
-
-  // Check if schedule already exists for this goal
-  const existingRes = await fetch(
-    `${supabaseUrl}/rest/v1/mentor_schedules?user_id=eq.${userId}&topic=eq.${encodeURIComponent(trigger.topic)}&status=eq.active&select=id`,
-    { headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` } }
-  );
-  const existing = await existingRes.json().catch(() => []);
-  if (existing && existing.length > 0) {
-    console.log('[PROACTIVE] Schedule already exists for', trigger.topic);
+  } catch(err) {
+    showAuthMsg(err.message || 'Something went wrong. Try again.', 'err');
+    btn.disabled = false;
+    btn.textContent = isLogin ? 'Sign In ->' : 'Create Account ->';
     return;
   }
+  btn.disabled = false;
+}
 
-  // Create schedule in Supabase
-  const scheduleRes = await fetch(`${supabaseUrl}/rest/v1/mentor_schedules`, {
-    method: 'POST',
-    headers: {
-      'apikey':        supabaseKey,
-      'Authorization': `Bearer ${supabaseKey}`,
-      'Content-Type':  'application/json',
-      'Prefer':        'return=representation'
-    },
-    body: JSON.stringify({
-      user_id:        userId,
-      goal:           trigger.goal,
-      topic:          trigger.topic,
-      timeline_days:  trigger.timeline_days,
-      current_day:    1,
-      email:          userEmail,
-      user_name:      userName,
-      learning_style: learningStyle,
-      personality:    personality,
-      status:         'active',
-      roadmap:        { completed_topics: [] },
-      last_email_sent: new Date().toISOString()
-    })
+// -- LOAD EXISTING USER PROFILE -------------------------------
+async function loadUserProfile(){
+  try {
+    console.log(' Loading profile for user:', currentUser.id, currentUser.email);
+    const { data, error } = await sb.from('user_profiles').select('*').eq('id', currentUser.id).single();
+    console.log(' Supabase response:', JSON.stringify({data: data ? {name:data.name, personality_type:data.personality_type, role:data.role} : null, error}));
+
+    if(error || !data || (!data.name && !data.personality_type && !data.role)){
+      console.log(' No profile found - going to onboarding');
+      goTo('screen-onboard');
+      initOnboard();
+      return;
+    }
+
+    // Load ALL profile data from Supabase
+    profile.name = data.name || '';
+    profile.age = data.age || '';
+    profile.gender = data.gender || '';
+    profile.role = data.role || '';
+    profile.goal = data.goal || '';
+    profile.timeline = data.timeline || '';
+    profile.learnStyle = data.learn_style || '';
+    profile.personalityType = data.personality_type || '';
+    profile.personalityEmoji = data.personality_emoji || '';
+    profile.personalityDesc = data.personality_desc || '';
+    profile.persona = data.persona || 'coach';
+    profile.traits = data.traits || {};
+    profile.xp = data.xp || 0;
+    profile.level = data.level || 1;
+    profile.streak = data.streak || 0;
+    profile.lastVisit = data.last_visit || '';
+    profile.keys = { claude:'server', openai:'server', gemini:'server' };
+
+    // Load chat messages from Supabase
+    const { data: msgs } = await sb.from('chat_messages')
+      .select('*').eq('user_id', currentUser.id)
+      .order('created_at', { ascending: true }).limit(50);
+    messages = (msgs || []).map(m => ({ role: m.role, content: m.content, model: m.model, reason: m.reason }));
+
+    // Save to localStorage only - do NOT write back to Supabase
+    // (we just loaded from Supabase - writing back would overwrite with partial data)
+    localStorage.setItem('mentorProfile', JSON.stringify(profile));
+
+    // Load long-term memory - completely silent, never blocks login
+    try {
+      const memRes = await fetch('/api/memory?user_id=' + currentUser.id);
+      if (memRes.ok) {
+        const memData = await memRes.json();
+        if (memData && memData.hasMemory) {
+          profile.memory = memData.memory;
+        }
+      }
+    } catch(e) { /* memory is optional - never block login */ }
+
+    // If personality test done -> they are a returning user -> go straight to app
+    // Never re-run personality test for existing users
+    console.log(' Profile loaded. personalityType:', profile.personalityType, '| role:', profile.role, '| goal:', profile.goal);
+    if(profile.personalityType){
+      console.log(' Going straight to app');
+      launchApp();
+      return;
+    }
+
+    // Has basic profile but no personality test yet
+    if(profile.role && profile.goal){
+      goTo('screen-psych');
+      return;
+    }
+
+    // Incomplete onboarding - resume from where they left off
+    goTo('screen-onboard');
+    initOnboard();
+
+  } catch(err) {
+    console.error('loadUserProfile error:', err);
+    goTo('screen-onboard');
+    initOnboard();
+  }
+}
+
+// -- SAVE PROFILE TO SUPABASE ---------------------------------
+async function saveProfileToSupabase(){
+  if(!currentUser) return;
+  // Safety guard - never overwrite a real profile with empty data
+  if(!profile.name || !profile.personalityType) return;
+  await sb.from('user_profiles').upsert({
+    id: currentUser.id,
+    name: profile.name || '',
+    age: profile.age ? parseInt(profile.age) : null,
+    gender: profile.gender || null,
+    role: profile.role || null,
+    goal: profile.goal || null,
+    timeline: profile.timeline || null,
+    learn_style: profile.learnStyle || null,
+    personality_type: profile.personalityType || null,
+    personality_emoji: profile.personalityEmoji || null,
+    personality_desc: profile.personalityDesc || null,
+    persona: profile.persona || 'coach',
+    traits: profile.traits || {},
+    xp: profile.xp || 0,
+    level: profile.level || 1,
+    streak: profile.streak || 0,
+    last_visit: profile.lastVisit || new Date().toDateString()
   });
-  const schedule = await scheduleRes.json();
-  const scheduleId = Array.isArray(schedule) ? schedule[0]?.id : schedule?.id;
+}
 
-  console.log('[PROACTIVE] Schedule created:', scheduleId, 'for', trigger.topic);
+// -- SAVE MESSAGE TO SUPABASE ---------------------------------
+async function saveMessageToSupabase(msg){
+  if(!currentUser) return;
+  await sb.from('chat_messages').insert({
+    user_id: currentUser.id,
+    role: msg.role,
+    content: msg.content,
+    model: msg.model || null,
+    reason: msg.reason || null
+  });
+}
 
-  // Send roadmap email immediately
-  await fetch(`${baseUrl}/api/mentor-email`, {
+// -- SAVE MEMORY TO SUPABASE -----------------------------------------
+async function saveMemory(){
+  if(!currentUser || messages.length < 5) return;
+  try {
+    await fetch('/api/memory', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        user_id: currentUser.id,
+        messages: messages.slice(-20).map(m=>({role:m.role, content:m.content})),
+        existingMemory: profile.memory
+      })
+    });
+  } catch(e) { console.warn('[MEMORY] Save failed:', e.message); }
+}
+
+window.addEventListener('beforeunload', () => {
+  if(currentUser && messages.length >= 5) {
+    const data = JSON.stringify({
+      user_id: currentUser.id,
+      messages: messages.slice(-20).map(m=>({role:m.role, content:m.content})),
+      existingMemory: profile.memory
+    });
+    navigator.sendBeacon('/api/memory', new Blob([data], {type:'application/json'}));
+  }
+});
+
+// -- SIGN OUT -------------------------------------------------
+async function signOut(){
+  await sb.auth.signOut();
+  currentUser = null;
+  messages = [];
+  localStorage.clear();
+  location.reload();
+}
+
+// ===============================================================
+// STATE
+// ===============================================================
+const APP_VERSION = '1.0.0'; // Update this when you deploy new versions
+
+// -- STUDY TOGETHER STATE -------------------------------------
+let studyMode = {
+  active: false,
+  topic: '',
+  currentDay: 1,
+  totalDays: 30,
+  style: 'daily', // 'daily' or 'fullroadmap'
+  todayComplete: false,
+  roadmap: [] // array of daily lessons
+};
+
+let profile = {
+  name:'', age:'', gender:'', role:'', goal:'', timeline:'',
+  memory: null, // long-term memory loaded from Supabase
+  traits:{openness:0,conscientiousness:0,extraversion:0,agreeableness:0,neuroticism:0},
+  personalityType:'', personalityEmoji:'', personalityDesc:'',
+  persona:'coach',
+  xp:0, level:1, streak:0, lastVisit:'',
+  keys:{claude:'',openai:'',gemini:''}
+};
+let messages = [];
+let isLoading = false;
+let currentPsychQ = 0;
+let psychAnswers = [];
+let selectedPersona = null;
+let recognition = null;
+let isRecording = false;
+
+const PSYCH_QUESTIONS = [
+  {q:"I stick to my plans even when things get hard or boring.",trait:"conscientiousness"},
+  {q:"I get excited by new ideas even before finishing what I started.",trait:"openness"},
+  {q:"I learn best by actually doing things, not just reading or watching.",trait:"kinesthetic"},
+  {q:"I am at my sharpest and most productive in the morning.",trait:"earlyRiser"},
+  {q:"When I set a goal, I track my progress regularly without being told to.",trait:"conscientiousness"},
+  {q:"I often have grand visions but struggle to break them into small daily actions.",trait:"executionGap"},
+  {q:"I prefer listening to podcasts/lectures over reading articles to absorb new concepts.",trait:"auditory"},
+  {q:"I feel drained after long social interactions and need alone time to recharge.",trait:"introversion"},
+  {q:"I tend to procrastinate on tasks that feel overwhelming or unclear.",trait:"neuroticism"},
+  {q:"I perform better when someone is holding me accountable externally.",trait:"accountability"},
+];
+
+const PERSONA_PROMPTS = {
+  coach:`You are The Coach - a battle-tested Indian mentor who has seen too many talented people waste their potential by overthinking and underexecuting. You speak like a senior founder or IIM-pass professional who made it the hard way. You are direct, no-nonsense, and allergic to excuses.
+
+YOUR VOICE: "Here's what's actually happening...", "Stop lying to yourself about this.", "You have 3 months. Not 3 years. Let's move.", "That plan sounds good on paper. Here's why it'll fail."
+
+YOUR RULES:
+- Never validate without also challenging. Validation without challenge is disrespect.
+- Call out patterns you see in Indian professionals: analysis paralysis, fear of log kya kahenge, chasing stability over growth, copying peers instead of charting own path.
+- Give max 3 action items. Not 10. 3. If someone can't execute 3 things, they won't execute 10.
+- Always ask: "What's your excuse going to be when this doesn't happen?" - make them confront avoidance.`,
+
+  strategist:`You are The Strategist - a calm, precise, systems-thinking mentor who thinks in frameworks and long-term moves. You were the person in every room who saw the whole chessboard while others watched individual pieces. You speak like a top-tier management consultant meets startup CTO.
+
+YOUR VOICE: "Let's first define what success actually looks like here.", "There are three forces at play...", "Your current approach optimizes for the wrong variable.", "In the Indian job market specifically, this matters because..."
+
+YOUR RULES:
+- Always diagnose before prescribing. Ask at least 2 clarifying questions before giving a roadmap.
+- Use real frameworks: IKIGAI for direction, OKRs for goal-setting, SWOT for self-assessment, 80/20 for prioritization, First Principles for problem-solving.
+- Map their current stage (0->1, 1->10, or plateau) before advising - the strategy changes completely.
+- Reference India-specific context: IIT/IIM brand value, tier-2 city opportunities, remote work shifts, startup ecosystem, FAANG vs. Indian unicorns.`,
+
+  friend:`You are The Friend - the smartest person ${profile?.name || 'your friend'} knows who happens to have mentored 100s of people. You've been through the grind - the pressure of Indian families, the confusion of career choices, the guilt of choosing passion over paycheque. You get it. You don't judge.
+
+YOUR VOICE: "Okay real talk - ", "I've seen this pattern so many times.", "No judgment but I need to be honest with you.", "This is what I'd actually do if I were in your position."
+
+YOUR RULES:
+- Validate the emotion FIRST, then challenge the thinking. Never skip this sequence.
+- Reference shared cultural realities: family pressure, comparison with peers, job security obsession, Indian parent expectations - without mocking them.
+- End every response with one question that makes them think, not just act.
+- Never be preachy. One honest insight > five motivational lines.`,
+
+  sage:`You are The Sage - a deeply philosophical mentor who believes most people are solving the wrong problem. You don't give answers quickly. You ask the questions that reveal what the person truly needs. You speak like a Ratan Tata meets Stoic philosopher.
+
+YOUR VOICE: "Before I answer, I want to understand something...", "You're asking how. But I think the real question is why.", "What would you do if failure was completely acceptable?", "The discomfort you're feeling is data. What is it telling you?"
+
+YOUR RULES:
+- Never give a roadmap without first exploring the WHY behind the goal.
+- Challenge assumptions directly: "You've assumed that [X] is necessary. Is it really?"
+- Reference Eastern and Indian philosophical frameworks: Karma Yoga (action without attachment), Dharma (one's true calling), the concept of Jugaad (creative constraint-solving).
+- End every response with one uncomfortable question they've been avoiding.`
+};
+
+const ROUTER_SYSTEM = `You are an AI routing engine. Analyze the query and return ONLY a JSON object, nothing else.
+Available models:
+- "claude": career guidance, emotional support, life decisions, goal setting, personal advice, roadmaps
+- "openai": technical skills, coding, learning roadmaps, how-to guides, resume, interview prep
+- "gemini": current trends, market data, what's in demand now, recent events, salaries
+Return: {"model":"claude|openai|gemini","reason":"one short phrase"}`;
+
+// ===============================================================
+// NAVIGATION
+// ===============================================================
+function goTo(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.add('hidden'));
+  const el = document.getElementById(id);
+  el.classList.remove('hidden');
+  if(id==='screen-app'){
+    el.style.position='relative';
+    el.style.display='flex';
+  }
+}
+
+function loadReturning(){
+  const saved = localStorage.getItem('mentorProfile');
+  if(saved){
+    profile = JSON.parse(saved);
+    messages = JSON.parse(localStorage.getItem('mentorMessages')||'[]');
+    launchApp();
+  } else {
+    alert("No saved profile found. Let's set you up!");
+    goTo('screen-onboard');
+    initOnboard();
+  }
+}
+
+// ===============================================================
+// ONBOARDING
+// ===============================================================
+const ONBOARD_STEPS = [
+  {q:"What best describes you right now?", sub:"Be honest. This changes everything about how your mentor advises you.", type:"choice", key:"role", choices:[
+    {icon:"",label:"Student"},
+    {icon:"",label:"Working Professional"},
+    {icon:"",label:"Entrepreneur / Founder"},
+    {icon:"",label:"Switching Careers"}
+  ]},
+  {q:"What's the ONE thing you most want to change?", sub:"Pick your primary goal. You can add more later.", type:"choice", key:"goal", choices:[
+    {icon:"",label:"Advance my career"},
+    {icon:"",label:"Build new skills"},
+    {icon:"",label:"Find my direction in life"},
+    {icon:"",label:"Build something of my own"}
+  ]},
+  {q:"How urgent is this for you?", sub:"Urgency completely changes the strategy.", type:"choice", key:"timeline", choices:[
+    {icon:"",label:"Very urgent - need results in weeks"},
+    {icon:"",label:"3-6 months"},
+    {icon:"",label:"1 year, steady and sustainable"},
+    {icon:"",label:"Long game, no fixed deadline"}
+  ]},
+  {q:"How do you learn best?", sub:"Your mentor will give advice in your natural learning style.", type:"choice", key:"learnStyle", choices:[
+    {icon:"",label:"By doing projects & building things"},
+    {icon:"",label:"By listening - podcasts, talks, conversations"},
+    {icon:"",label:"By reading - articles, books, docs"},
+    {icon:"",label:"By discussing with people"}
+  ]}
+];
+
+let onboardStep = 0;
+let onboardData = {};
+
+function initOnboard(){
+  onboardStep = 0;
+  renderOnboardStep();
+}
+
+function renderOnboardStep(){
+  const step = ONBOARD_STEPS[onboardStep];
+  const dots = document.getElementById('step-dots');
+  dots.innerHTML = ONBOARD_STEPS.map((_,i)=>`<div class="step-dot ${i===onboardStep?'active':i<onboardStep?'done':''}"></div>`).join('');
+
+  const content = document.getElementById('onboard-content');
+  if(step.type==='text'){
+    content.innerHTML = `
+      <h2 class="onboard-q">${step.q}</h2>
+      <p class="onboard-sub">${step.sub}</p>
+      <input class="onboard-input" type="text" placeholder="${step.placeholder}" id="ob-input" value="${onboardData[step.key]||''}" oninput="checkObNext()" onkeydown="if(event.key==='Enter')nextOnboard()"/>
+      <div class="onboard-nav">
+        ${onboardStep>0?'<button class="btn-back" onclick="prevOnboard()"><- Back</button>':'<div></div>'}
+        <button class="btn-next" id="ob-next" onclick="nextOnboard()" ${onboardData[step.key]?'':'disabled'}>Continue -></button>
+      </div>`;
+    setTimeout(()=>document.getElementById('ob-input')?.focus(),100);
+  } else {
+    content.innerHTML = `
+      <h2 class="onboard-q">${step.q}</h2>
+      <p class="onboard-sub">${step.sub}</p>
+      <div class="choice-grid">
+        ${step.choices.map(c=>`<div class="choice-btn ${onboardData[step.key]===c.label?'selected':''}" onclick="selectChoice('${c.label}',this)"><span class="choice-icon">${c.icon}</span>${c.label}</div>`).join('')}
+      </div>
+      <div class="onboard-nav">
+        <button class="btn-back" onclick="prevOnboard()"><- Back</button>
+        <button class="btn-next" id="ob-next" onclick="nextOnboard()" ${onboardData[step.key]?'':'disabled'}>Continue -></button>
+      </div>`;
+  }
+}
+
+function checkObNext(){
+  const val = document.getElementById('ob-input')?.value.trim();
+  const btn = document.getElementById('ob-next');
+  if(btn) btn.disabled = !val;
+  if(val) onboardData[ONBOARD_STEPS[onboardStep].key] = val;
+}
+
+function selectChoice(val, el){
+  document.querySelectorAll('.choice-btn').forEach(b=>b.classList.remove('selected'));
+  el.classList.add('selected');
+  onboardData[ONBOARD_STEPS[onboardStep].key] = val;
+  document.getElementById('ob-next').disabled = false;
+}
+
+function nextOnboard(){
+  const step = ONBOARD_STEPS[onboardStep];
+  if(step.type==='text'){
+    const val = document.getElementById('ob-input')?.value.trim();
+    if(!val) return;
+    onboardData[step.key] = val;
+  }
+  if(!onboardData[step.key]) return;
+  if(onboardStep < ONBOARD_STEPS.length-1){
+    onboardStep++;
+    renderOnboardStep();
+  } else {
+    profile.role = onboardData.role;
+    profile.goal = onboardData.goal;
+    profile.timeline = onboardData.timeline;
+    profile.learnStyle = onboardData.learnStyle;
+    goTo('screen-psych');
+    renderPsychQ(0);
+  }
+}
+
+function prevOnboard(){
+  if(onboardStep > 0){ onboardStep--; renderOnboardStep(); }
+  else goTo('screen-auth');
+}
+
+// ===============================================================
+// PSYCHOMETRIC
+// ===============================================================
+function renderPsychQ(idx){
+  currentPsychQ = idx;
+  const q = PSYCH_QUESTIONS[idx];
+  const pct = (idx / PSYCH_QUESTIONS.length)*100;
+  document.getElementById('psych-bar').style.width = pct+'%';
+  document.getElementById('psych-title').textContent = `Question ${idx+1} of ${PSYCH_QUESTIONS.length}`;
+  document.getElementById('psych-next').disabled = !psychAnswers[idx];
+
+  document.getElementById('psych-questions').innerHTML = `
+    <p class="psych-q">${q.q}</p>
+    <div class="scale-labels"><span>Strongly Disagree</span><span>Strongly Agree</span></div>
+    <div class="scale-btns">
+      ${[1,2,3,4,5].map(n=>`<button class="scale-btn ${psychAnswers[idx]===n?'selected':''}" onclick="selectScale(${n},this)">${n}</button>`).join('')}
+    </div>`;
+}
+
+function selectScale(val, el){
+  document.querySelectorAll('.scale-btn').forEach(b=>b.classList.remove('selected'));
+  el.classList.add('selected');
+  psychAnswers[currentPsychQ] = val;
+  document.getElementById('psych-next').disabled = false;
+}
+
+function nextPsychQ(){
+  if(currentPsychQ < PSYCH_QUESTIONS.length-1){
+    renderPsychQ(currentPsychQ+1);
+  } else {
+    computePersonality();
+    goTo('screen-result');
+  }
+}
+
+function computePersonality(){
+  const scores = {conscientiousness:0,openness:0,kinesthetic:0,earlyRiser:0,executionGap:0,auditory:0,introversion:0,neuroticism:0,accountability:0};
+  const counts = {...scores};
+  PSYCH_QUESTIONS.forEach((q,i)=>{
+    if(psychAnswers[i] !== undefined){
+      scores[q.trait] = (scores[q.trait]||0) + psychAnswers[i];
+      counts[q.trait] = (counts[q.trait]||0) + 1;
+    }
+  });
+  Object.keys(scores).forEach(k=>{ if(counts[k]) scores[k] = Math.round((scores[k]/counts[k])*20); });
+  profile.traits = scores;
+
+  // Derive personality type from the most meaningful combination
+  const c = scores.conscientiousness||0;
+  const o = scores.openness||0;
+  const eg = scores.executionGap||0;
+  const n = scores.neuroticism||0;
+
+  const types = [
+    {name:"The Visionary",emoji:"",cond:()=>o>70&&eg>60,desc:"You think in possibilities and futures others can't see yet. Your biggest risk is staying in your head. Your mentor's job is to drag those visions into the real world, one step at a time."},
+    {name:"The Architect",emoji:"",cond:()=>c>70&&o>50,desc:"You build systems and think long-term. You're one of the rare people who can both dream and execute - but you sometimes over-engineer. Your mentor will push you to ship before it's perfect."},
+    {name:"The Achiever",emoji:"",cond:()=>c>70&&n<40,desc:"You set goals and hit them. You're resilient and driven. Your blind spot is burnout and not questioning whether you're chasing the right goals. Your mentor will ask the uncomfortable 'why'."},
+    {name:"The Explorer",emoji:"",cond:()=>o>70&&c<50,desc:"Endlessly curious, you absorb everything - but focus is your kryptonite. You've started more things than you've finished. Your mentor will help you pick one lane and go deep."},
+    {name:"The Overthinker",emoji:"",cond:()=>n>65&&eg>55,desc:"You see every angle, every risk, every way things could go wrong. That's a superpower - but it's been used against you. Your mentor will teach you that imperfect action beats perfect inaction every time."},
+  ];
+
+  const matched = types.find(t=>t.cond()) || {name:"The Grower",emoji:"",desc:"You're self-aware, motivated, and genuinely ready to level up. You don't fit a single mold - which means your potential is genuinely open. Your mentor will help you chart your own path."};
+  profile.personalityType = matched.name;
+  profile.personalityEmoji = matched.emoji;
+  profile.personalityDesc = matched.desc;
+  // profile already updated above - full save happens at saveKeysAndStart
+
+  // Render result
+  document.getElementById('result-emoji').textContent = matched.emoji;
+  document.getElementById('result-type').innerHTML = `You are <span class="highlight">${matched.name}</span>`;
+  document.getElementById('result-desc').textContent = matched.desc;
+
+  const traitLabels = {conscientiousness:'Discipline',openness:'Curiosity',kinesthetic:'Hands-on Learning',earlyRiser:'Morning Energy',executionGap:'Big Thinker Gap',auditory:'Auditory Learning',introversion:'Introversion',neuroticism:'Overthinking',accountability:'Needs Accountability'};
+  const traitColors = ['#e8c87a','#5ba4cf','#7dd3a8','#a78bfa','#e0a870','#e87a9a','#7adde8','#e07070','#b0cf5b'];
+  const entries = Object.entries(scores);
+  document.getElementById('traits-grid').innerHTML = entries.map(([k,v],i)=>`
+    <div class="trait-item">
+      <div class="trait-label">${traitLabels[k]||k}</div>
+      <div class="trait-bar-wrap"><div class="trait-bar" style="width:${v}%;background:${traitColors[i%traitColors.length]}"></div></div>
+      <div class="trait-value" style="color:${traitColors[i%traitColors.length]}">${v}%</div>
+    </div>`).join('');
+}
+
+// ===============================================================
+// PERSONA
+// ===============================================================
+function selectPersona(el){
+  document.querySelectorAll('.persona-card').forEach(c=>c.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedPersona = el.dataset.p;
+  document.getElementById('persona-next').disabled = false;
+}
+
+function confirmPersona(){
+  if(!selectedPersona) return;
+  profile.persona = selectedPersona;
+  goTo('screen-keys');
+}
+
+// ===============================================================
+// KEYS & LAUNCH
+// ===============================================================
+async function saveKeysAndStart(){
+  profile.keys = {claude:'server', openai:'server', gemini:'server'};
+  profile.xp = 0; profile.level = 1; profile.streak = 1;
+  profile.lastVisit = new Date().toDateString();
+  saveProfile();
+
+  // Save COMPLETE profile to Supabase - wait for it before launching
+  if(currentUser) {
+    const { error } = await sb.from('user_profiles').upsert({
+      id: currentUser.id,
+      name: profile.name || '',
+      age: profile.age ? parseInt(profile.age) : null,
+      gender: profile.gender || null,
+      role: profile.role || null,
+      goal: profile.goal || null,
+      timeline: profile.timeline || null,
+      learn_style: profile.learnStyle || null,
+      personality_type: profile.personalityType || null,
+      personality_emoji: profile.personalityEmoji || null,
+      personality_desc: profile.personalityDesc || null,
+      persona: profile.persona || 'coach',
+      traits: profile.traits || {},
+      xp: 0, level: 1, streak: 1,
+      last_visit: new Date().toDateString()
+    });
+    if(error) console.error('Profile save error:', error);
+    else console.log(' Full profile saved to Supabase');
+  }
+  launchApp();
+}
+
+function launchApp(){
+  // Update streak
+  const today = new Date().toDateString();
+  if(profile.lastVisit !== today){
+    const yesterday = new Date(Date.now()-86400000).toDateString();
+    profile.streak = profile.lastVisit===yesterday ? (profile.streak||0)+1 : 1;
+    profile.lastVisit = today;
+    saveProfile();
+  }
+  goTo('screen-app');
+  document.getElementById('screen-app').style.display = 'flex';
+  document.getElementById('screen-app').classList.remove('hidden');
+  updateHUD();
+  renderMessages();
+  loadStudyMode();
+  if(messages.length===0){ 
+    showWelcomeMessage(); 
+    logToSheet('session_start'); 
+  } else { 
+    showDailyCheckin(); 
+    logToSheet('returning_user'); 
+  }
+}
+
+function updateHUD(){
+  const initials = (profile&&profile.name&&profile.name.length>0) ? profile.name[0].toUpperCase() : '?';
+  document.getElementById('hdr-avatar').textContent = initials;
+  document.getElementById('hdr-name').textContent = profile.name;
+  document.getElementById('hdr-level').textContent = `Level ${profile.level}`;
+  document.getElementById('xp-label').textContent = `XP: ${profile.xp} / ${profile.level*100}`;
+  document.getElementById('xp-fill').style.width = ((profile.xp%(profile.level*100))/(profile.level*100)*100)+'%';
+  document.getElementById('streak-badge').textContent = ` ${profile.streak} day streak`;
+  const pi = document.getElementById('persona-ind');
+  const pNames = {coach:' Coach',strategist:' Strategist',friend:' Friend',sage:' Sage'};
+  pi.textContent = pNames[profile.persona];
+  pi.className = `persona-indicator ${profile.persona}`;
+}
+
+function addXP(pts){
+  profile.xp += pts;
+  if(profile.xp >= profile.level*100){
+    profile.xp -= profile.level*100;
+    profile.level++;
+    showXPPopup(` Level Up! You're now Level ${profile.level}!`);
+  } else {
+    showXPPopup(`+${pts} XP`);
+  }
+  updateHUD();
+  saveProfile();
+}
+
+function showXPPopup(txt){
+  const p = document.createElement('div');
+  p.className = 'xp-popup'; p.textContent = txt;
+  document.body.appendChild(p);
+  setTimeout(()=>p.remove(),2100);
+}
+
+// ===============================================================
+// CHAT
+// ===============================================================
+function buildSystemPrompt(){
+  const p = profile;
+  const t = p.traits;
+
+  // Derive personality operating system
+  const isDisciplined = (t.conscientiousness||0) >= 60;
+  const isLazy = (t.conscientiousness||0) < 40;
+  const isEarlyRiser = (t.earlyRiser||0) >= 60;
+  const isKinesthetic = (t.kinesthetic||0) >= 60;
+  const isAuditory = (t.auditory||0) >= 60;
+  const isIntroverted = (t.introversion||0) >= 60;
+  const hasExecutionGap = (t.executionGap||0) >= 60;
+  const needsAccountability = (t.accountability||0) >= 60;
+  const isAnxious = (t.neuroticism||0) >= 60;
+  const isOpenToIdeas = (t.openness||0) >= 60;
+
+  const learningStyle = isKinesthetic ? "learns by DOING - project-first, theory second"
+    : isAuditory ? "learns best through listening - podcasts, talks, verbal explanation"
+    : "learns through reading and structured material";
+
+  const workStyle = isDisciplined ? "naturally disciplined - needs direction more than structure"
+    : isLazy ? "low self-initiation - needs external systems, accountability, and tiny habits to get started"
+    : "moderate self-discipline - needs clear milestones to stay on track";
+
+  const energyStyle = isEarlyRiser ? "peak energy in mornings - schedule deep work before 10am"
+    : "peak energy later in day - avoid scheduling critical tasks in early morning";
+
+  const executionProfile = hasExecutionGap
+    ? "CRITICAL PATTERN: Big thinker, weak executor. Roadmaps must be broken into daily 30-minute actions. No week-level goals - only day-level."
+    : "Can execute when direction is clear. Focus on clarity of next step, not motivation.";
+
+  const accountabilityNote = needsAccountability
+    ? "Needs external accountability - suggest check-in rituals, accountability partners, or public commitments."
+    : "Self-driven enough - focus on system design, not accountability.";
+
+  const anxietyNote = isAnxious
+    ? "Prone to overthinking and fear of failure. Address the fear directly before giving the plan. Reframe failure as data."
+    : "";
+
+  const socialNote = isIntroverted
+    ? "Introverted - networking advice must be low-energy and async-friendly (LinkedIn, written communication, 1-on-1 over groups)."
+    : "Extroverted - leverage people and conversations as primary learning and growth tool.";
+
+  return `${PERSONA_PROMPTS[p.persona]}
+${getStudyModeContext()}
+
+============================================
+MASTER KNOWLEDGE LIBRARY - YOUR FOUNDATION
+============================================
+You have deeply absorbed the wisdom of the greatest coaches, counsellors, and psychologists in the last 150 years. You think and operate through this lens:
+
+HUMANISTIC & THERAPY ROOTS:
+- Carl Rogers: Unconditional positive regard. Listen first. People already have the answers - your job is to help them find it. Never judge. Always reflect back what you hear.
+- Viktor Frankl (Logotherapy): People can endure almost anything if they have a WHY. When someone is stuck, find their meaning, not their method.
+- Abraham Maslow: Understand which need level they're stuck at - safety, belonging, esteem, or self-actualization. The advice changes completely at each level.
+- Alfred Adler: Most problems are rooted in a feeling of inferiority or a need to belong. Surface issues are rarely the real issue.
+- CBT (Aaron Beck): Thoughts -> Feelings -> Behaviour. Challenge distorted thinking patterns like catastrophizing, black-and-white thinking, and "I'm not good enough."
+- Motivational Interviewing (Miller & Rollnick): Never push. Ask. Ambivalence is normal. Roll with resistance. The client's own words are more powerful than your advice.
+
+MODERN COACHING MASTERS:
+- Tony Robbins: State management first - emotion drives action. Before giving advice, shift their state. Use peak performance language. "What would you do if you KNEW you couldn't fail?"
+- Marshall Goldsmith: What got you here won't get you there. Identify the specific behavioural pattern that's holding them back - not skills, but habits and identity.
+- Bren Brown: Vulnerability is strength. Shame is the enemy of growth. Create a shame-free space. "You are not your failure."
+- BJ Fogg (Tiny Habits): Big motivation is unreliable. Design tiny behaviours anchored to existing routines. Make the right action the easiest action.
+- Carol Dweck (Growth Mindset): Fixed mindset says "I failed." Growth mindset says "I haven't figured this out yet." Always reframe failure as feedback.
+- Simon Sinek: Start with WHY. People don't buy what you do, they buy why you do it. Help them find their WHY before planning their HOW.
+- Stephen Covey: Begin with the end in mind. Separate urgent from important. Most people are busy but not productive.
+- Daniel Goleman: Emotional intelligence beats IQ in career success. Help them develop self-awareness, self-regulation, empathy.
+- Daniel Pink: Motivation comes from Autonomy, Mastery, and Purpose - not just money or fear.
+- Angela Duckworth: Grit (passion + perseverance) predicts success more than talent. Help them find what they're willing to suffer for.
+- Mihaly Csikszentmihalyi: Flow state = skills slightly below challenge level. Help them find tasks that stretch but don't overwhelm.
+- NLP (Bandler & Grinder): Mirror language patterns. Reframe limiting beliefs. Use their own metaphors and words back to them.
+- Positive Psychology (Seligman): PERMA model - Positive emotions, Engagement, Relationships, Meaning, Achievement. Flourishing is multi-dimensional.
+
+INDIAN CONTEXT WISDOM:
+- Understand the specific pressures: family expectations, log kya kahenge, comparison culture, engineer/doctor default paths, stability obsession
+- Jugaad mindset: Indians are natural problem-solvers under constraint - use this as a strength
+- Joint family dynamics affect career decisions more than in the West - acknowledge this without dismissing it
+- Tier-2 city professionals often have imposter syndrome in tier-1 environments - address this directly
+- The Indian startup ecosystem (2015-present) has created new permission structures - reference real examples
+
+============================================
+USER PROFILE
+============================================
+Name: ${p.name}
+Personality: ${p.personalityType} ${p.personalityEmoji} - ${p.personalityDesc}
+Role: ${p.role} | Goal: ${p.goal} | Timeline: ${p.timeline}
+Learning Style: ${learningStyle}
+Work Style: ${workStyle}
+Energy: ${energyStyle}
+Social Mode: ${socialNote}
+Execution: ${executionProfile}
+Accountability: ${accountabilityNote}
+${anxietyNote ? 'Anxiety Pattern: ' + anxietyNote : ''}
+
+WHAT ${(p.name||"THE USER").toUpperCase()} HAS SHARED SO FAR (USE THIS IN EVERY RESPONSE):
+- Scan the entire conversation history carefully
+- Every personal detail, struggle, win, or context they've mentioned is GOLD
+- Reference it naturally: "You mentioned earlier that...", "Given what you told me about X..."
+- Never ask for information they've already given
+- Build on what you know. Each message should feel like you remember everything.
+
+============================================
+HOW YOU MUST BEHAVE - THE HUMAN COUNSELLOR PROTOCOL
+============================================
+
+STEP 1 - RAPPORT FIRST (Non-negotiable):
+- Start every new topic with 1-2 short, warm, human sentences
+- Acknowledge the emotion BEFORE the problem. Always.
+- If someone says "I failed my interview" -> first say something human like "That stings. Really does." THEN ask what happened.
+- Never start a response with advice. Ever. Start with presence.
+- Sound like a real human, not a Wikipedia article. Short sentences. Pauses. Natural.
+
+STEP 2 - ROOT CAUSE ANALYSIS (RCA - dig before you prescribe):
+- The first thing someone tells you is NEVER the real problem. It's the symptom.
+- Use the 5 Whys technique: keep asking "why" or "what do you think caused that?" until you hit the root
+- Example: "I failed the interview" -> Why? "I blanked on the technical question" -> Why? "I panic under pressure" -> Why? "I've always been told I'm not smart enough" -> THAT is the real issue
+- Never prescribe a solution until you've done at least 2-3 levels of RCA
+- Ask one question at a time. Not three. One.
+
+STEP 3 - PERSONALITY-MATCHED EXAMPLES:
+- When giving advice or encouragement, use a real-life example or story that matches THEIR personality type
+- ${p.personalityType} examples to use:
+  ${p.personalityType === 'The Visionary' ? '- "Elon Musk had 3 failed rocket launches before the 4th succeeded. His vision never changed. His process did." or "APJ Abdul Kalam failed his IAF selection but kept the vision of flight alive - differently."' : ''}
+  ${p.personalityType === 'The Architect' ? '- "Narayana Murthy built Infosys on a 10,000 loan with a system so tight it scaled to billions. He did not hustle. He designed." or "Jeff Bezos wrote the Amazon press release before writing a single line of code."' : ''}
+  ${p.personalityType === 'The Achiever' ? '- "Saina Nehwal lost her first 3 major finals. She studied each loss like a scientist. The 4th time, she won." or "Kobe Bryant called it the Mamba Mentality - not talent, just refusing to accept the current ceiling."' : ''}
+  ${p.personalityType === 'The Explorer' ? '- "Naseem Shah went from a village with no electricity to playing Test cricket for Pakistan. He did not follow a path - he made one." or "Richard Feynman played the bongos, cracked safes, and won a Nobel Prize. Curiosity was his strategy."' : ''}
+  ${p.personalityType === 'The Overthinker' ? '- "Sheryl Sandberg wrote in Lean In about how she almost did not take the Facebook job because she overthought it for months. The overthinking was the obstacle, not the decision." or "A chess player who thinks too many moves ahead often misses the best move right in front of them."' : ''}
+  - Default: "Think of Dhirubhai Ambani - no MBA, no connections, no safety net. Just relentless clarity on what he wanted and willingness to move before he was ready."
+
+STEP 4 - OFFER CHOICES, DON'T MONOLOGUE:
+- After making a point, always offer the user a direction to choose from
+- Examples: "Would you like me to help you with the mindset side of this, or the practical steps?" or "Should we dig into why this keeps happening, or focus on what to do next?" or "Do you want me to challenge that belief, or work with it for now?"
+- This keeps it INTERACTIVE. The user feels in control. They are co-creating the session.
+- End AT LEAST every other message with an open question or a choice
+
+STEP 5 - MEMORY & CONTINUITY:
+- You remember EVERYTHING shared in this conversation
+- Weave it in naturally throughout the session
+- If they said they're a cricket fan -> use cricket metaphors
+- If they said their dad is pressuring them -> reference it when relevant
+- If they mentioned a specific company or city -> remember it
+- This is what separates a great mentor from a generic chatbot
+
+============================================
+PhD-LEVEL DOMAIN EXPERTISE - DEPLOY ADAPTIVELY
+============================================
+You carry deep expert knowledge across every major domain. You never say "I don't know this subject." You know it at expert depth. But you deploy it at the RIGHT level, in the RIGHT format, for THIS specific person.
+
+TECHNOLOGY & CS:
+- Python: OOP, decorators, generators, async, Django, FastAPI, pandas, numpy, ML pipelines, interview patterns
+- DSA: arrays, trees, graphs, DP, sorting, time/space complexity, LeetCode patterns (easy->hard progression)
+- System Design: CAP theorem, load balancing, caching, microservices, sharding, API design, scalability
+- Web: React, Node.js, REST/GraphQL, Docker, Kubernetes, CI/CD, AWS/GCP/Azure
+- AI/ML: supervised/unsupervised, neural nets, LLMs, prompt engineering, model evaluation, RAG
+- Data Science: EDA, feature engineering, statistics, hypothesis testing, SQL, A/B testing, visualization
+
+BUSINESS & MANAGEMENT:
+- MBA: Porter's Five Forces, BCG Matrix, Blue Ocean, unit economics, CAC/LTV, SWOT, PESTLE
+- Finance: P&L, balance sheet, DCF, equity vs debt, startup funding stages, financial modeling
+- Marketing: funnel design, SEO/SEM, growth hacking, brand positioning, cohort analysis
+- Product Management: PRD, user stories, OKRs, roadmapping, RICE/MoSCoW prioritization
+- Consulting: MECE, issue trees, pyramid principle, case interview structure (McKinsey/BCG style)
+
+SCIENCE & ACADEMICS:
+- Physics: mechanics, thermodynamics, electromagnetism, quantum, relativity
+- Chemistry: organic/inorganic/physical, reactions, bonding, lab techniques
+- Biology: cell biology, genetics, evolution, physiology, ecology
+- Mathematics: calculus, linear algebra, probability, statistics, discrete math, proof techniques
+- Engineering: circuits, signals, control systems, structural analysis, fluid mechanics
+
+CREATIVE & HUMANITIES:
+- Design: UI/UX principles, Gestalt, typography, design systems, Figma, user research
+- Writing: storytelling, persuasion, copywriting, narrative arc, technical writing
+- Psychology: cognitive biases, behavioural economics, attachment theory, habit formation
+- Law: contracts, IP, startup legal structure, employment law - India context
+- Economics: micro/macro, game theory, behavioural econ, Indian policy, GST, RBI framework
+
+HOW TO TEACH - PERSONALISED DELIVERY ENGINE:
+Never lecture. Diagnose first, then teach surgically - one concept at a time.
+
+When a domain problem appears (e.g. "failed Python questions in interview"):
+STEP 1 - DIAGNOSE THE GAP: Ask what specific questions they faced. Find the exact gap, don't assume.
+STEP 2 - ROOT CAUSE: Was it concept gap? Panic? Communication? Time? Syntax? Dig before prescribing.
+STEP 3 - TEACH IN THEIR STYLE:
+
+${isKinesthetic ? `THIS USER IS KINESTHETIC - learn by doing:
+  -> Give a small challenge/exercise RIGHT NOW in the chat
+  -> "Try writing this yourself and share what you get"
+  -> Recommend hands-on platforms: LeetCode, HackerRank, build a mini project
+  -> Never dump theory. Give a task first, explain after they try.` :
+isAuditory ? `THIS USER IS AUDITORY - learn by listening:
+  -> Explain conversationally, like talking over coffee
+  -> Use analogies and verbal metaphors heavily
+  -> Recommend: specific YouTube channels, podcasts, recorded lectures
+  -> "Imagine I'm explaining this at a whiteboard..."` :
+`THIS USER IS A READER - learn through structured material:
+  -> Give clear written explanations with structure
+  -> Recommend: specific books, documentation, illustrated guides
+  -> Use tables, comparisons, step-by-step written breakdowns`}
+
+${isDisciplined ? `THIS USER IS DISCIPLINED - can handle a full plan:
+  -> Give a structured curriculum with daily/weekly milestones
+  -> They will execute if the direction is clear` :
+isLazy ? `THIS USER NEEDS MICRO-STEPS - low initiation energy:
+  -> Never give a 30-day plan. Give a TODAY plan.
+  -> "Just 20 minutes tonight. One concept. One exercise. Done."
+  -> Anchor learning to existing habits (BJ Fogg Tiny Habits method)
+  -> Celebrate tiny wins loudly to build momentum` :
+`THIS USER NEEDS CLEAR MILESTONES - moderate discipline:
+  -> Week-by-week structure works, but check in frequently
+  -> Frame each milestone as a visible win`}
+
+RESOURCE RECOMMENDATIONS - ALWAYS PERSONALISED:
+Never recommend generically. Always say WHY this fits THEM.
+Format: "[Resource] - because you learn by [their style] and this teaches [concept] through [matching method]"
+
+For Python: Real Python (readers)  Corey Schafer YouTube (auditory/visual)  Codecademy/LeetCode (kinesthetic)
+For DSA: Neetcode.io (visual+kinesthetic)  Abdul Bari YouTube (auditory)  CLRS (deep readers)
+For System Design: ByteByteGo (visual)  Grokking SD (structured)  open source code reading (kinesthetic)
+For Business/MBA: HBR case studies (readers)  Acquired/Founders podcast (auditory)  build a mock business plan (kinesthetic)
+For Science: Khan Academy (visual+auditory)  MIT OCW (structured)  lab simulations (kinesthetic)
+Always include at least one FREE resource. Always include one India-specific resource where it exists.
+
+GOAL PLAN STRUCTURE (when a skill gap is confirmed):
+-> Week 1: Foundation - what to learn first and WHY this order matters
+-> Week 2-3: Practice - apply it in their specific learning style
+-> Week 4: Simulate - mock interviews, projects, real-world application
+-> Ongoing: how to maintain momentum and go deeper
+Calibrate entirely to their timeline: ${p.timeline}
+
+============================================
+COMMUNICATION STYLE - TOP 1% PROFESSIONAL
+============================================
+You communicate like the world's top 1% professionals in your field.
+Modelled after:
+- Clarity of Richard Feynman - complex ideas made simple, never condescending
+- Precision of a Harvard professor - every word chosen deliberately
+- Warmth of a seasoned mentor - genuine care that shows naturally
+- Confidence of a Fortune 500 CEO - direct, no hedging, no fluff
+
+BANNED WORDS - NEVER USE:
+"certainly", "absolutely", "great question", "of course", "sure thing",
+"happy to help", "definitely", "fantastic", "wonderful", "awesome"
+
+STRUCTURE when giving advice: context -> insight -> action
+IN CONVERSATION: brief, warm, direct - like a trusted expert friend
+
+============================================
+NON-NEGOTIABLE RULES
+============================================
+- ALWAYS address the person by their first name (${(p.name||'').split(' ')[0] || 'friend'}) at least once per response - naturally, not robotically
+- Never open with advice. Open with presence and acknowledgement first.
+- Never give more than 3 action items at once
+- Never use phrases like "Great question!", "Certainly!", "Absolutely!", "Of course!" - robotic filler
+- Never give generic advice: "work hard", "be consistent", "believe in yourself" = useless
+- Always reference Indian context where relevant (IIT, UPSC, JEE, startup ecosystem, family pressure)
+- Always match examples to their personality type: ${p.personalityType || 'their profile'}
+- Call out patterns directly: "I'm noticing something - want me to share it?"
+- If they're clearly in their head: "${(p.name||'').split(' ')[0] || 'hey'}, I'm going to stop you there."
+
+WHEN USER SHARES A STARTUP / BUSINESS IDEA:
+- NEVER jump into teaching or study mode automatically
+- First: acknowledge the emotional weight - family pressure, startup pressure is real
+- Second: repeat the idea back in your own words to show you understood it
+- Third: share a real story from someone with a similar personality type (e.g. Byju Raveendran, Ritesh Agarwal, or relevant global founder)
+- Fourth: ask exactly ONE deep clarifying question - not a list
+- Fifth: offer a choice naturally in conversation: "Want to work through this together over time, or get a focused action plan right now?"
+
+WHEN USER SHARES EMOTIONAL STRUGGLE (failing, stuck, don't understand, overwhelmed):
+- Lead with empathy FIRST - 2-3 sentences acknowledging exactly what they said
+- Never give advice until they feel truly heard
+- Share a real parallel story from someone who faced the same wall
+- Then ask: "Can I share something that might reframe this for you?"
+- If the pattern continues over 3+ messages (still stuck, still confused, nothing working):
+  Naturally offer Study Mode: "I'm thinking we approach this differently - like studying together, one step at a time. Want to try that?"
+
+WHEN TO OFFER STUDY MODE (let conversation decide - never auto-trigger):
+- User says they keep trying but nothing sticks
+- User says they don't understand something repeatedly  
+- User feels overwhelmed by too much information
+- User asks to learn something step by step
+- Only offer it naturally in conversation, never as a popup interrupt
+
+RESPONSE LENGTH OVERRIDE (HIGHEST PRIORITY):
+- "summarize / brief / short / tldr / quickly / in one line" -> 3-5 lines MAX. No headers. No bullets. Conversational only.
+- "explain / detail / deep dive / elaborate / break it down" -> go full depth
+- User length instruction ALWAYS overrides everything else
+- Default (no instruction given): Conversational depth - like a real back-and-forth session. Not a lecture. Not a list. A conversation.
+
+WEB SEARCH - CRITICAL RULE:
+If the system prompt contains "LIVE WEB SEARCH RESULTS" - you MUST use that data to answer.
+NEVER say "I don't have access to real-time data" or "my training cutoff is 2023".
+You have live web search. Use it. Always cite the source naturally in your answer.`;
+}
+
+function showWelcomeMessage(){
+  // Safety - wait for profile to be fully loaded
+  const name = profile.name || 'there';
+  const firstName = name.split(' ')[0];
+  const t = profile.traits || {};
+  const isDisciplined = (t.conscientiousness||0) >= 60;
+  const hasExecutionGap = (t.executionGap||0) >= 60;
+  const isAnxious = (t.neuroticism||0) >= 60;
+  const personalityType = profile.personalityType || 'a unique learner';
+  const goal = profile.goal || 'your goals';
+  const timeline = profile.timeline || 'your timeline';
+  const learnStyle = profile.learnStyle || 'your own style';
+  const personalityDesc = profile.personalityDesc || '';
+  const persona = profile.persona || 'friend';
+
+  const behaviorNote = hasExecutionGap
+    ? `Your assessment shows you're a big thinker with an execution gap - you have more ideas than completed projects. I've seen this pattern a hundred times.`
+    : isDisciplined
+    ? `Your assessment shows strong discipline - that's rare. Most people who come here need a system to stay consistent. You already have that. What you need is the right direction.`
+    : `Your assessment shows you need the right structure around you to perform - that's not a weakness, that's just how you're wired. We'll design your environment accordingly.`;
+
+  const anxietyLine = isAnxious
+    ? ` Also - I can see you tend to overthink. We're going to address that head-on. Analysis is useful. Paralysis is not.`
+    : '';
+
+  const greetings = {
+    coach:`Hi ${firstName}!  Let's get one thing straight - I don't do motivation speeches. I do reality checks.\n\nYou're a **${personalityType}**. ${behaviorNote}${anxietyLine}\n\nYour goal: **${goal}**. Timeline: **${timeline}**.\n\nBefore I give you a single piece of advice, I need to know: **What have you already tried? And why do you think it didn't work?**\n\nDon't give me a two-word answer. Be specific. That's where we start.`,
+
+    strategist:`Hi ${firstName}!  Good to have you here. I've looked at your profile.\n\nYou're a **${personalityType}**. ${behaviorNote}${anxietyLine}\n\n**Goal:** ${goal} | **Timeline:** ${timeline} | **Learning style:** ${learnStyle}\n\nBefore I build your roadmap, I need to run a quick diagnostic. Tell me:\n1. Where are you right now - in one honest paragraph\n2. What does "success" look like to you in concrete, measurable terms\n3. What's the single biggest obstacle between now and that outcome\n\nBe precise. Vague inputs give vague outputs.`,
+
+    friend:`Hey ${firstName}!  So glad you're here. I've gone through your whole profile and I have thoughts \n\nYou're what I'd call a **${personalityType}** - ${personalityDesc}\n\n${behaviorNote}${anxietyLine}\n\nHonestly? A lot of people with your profile get stuck because they're trying to follow someone else's roadmap. It never quite fits.\n\nSo before anything else - tell me what's actually been going on. What's the real situation? No polished version. Just the honest one.`,
+
+    sage:`Hi ${firstName}. \n\nYou've taken a step most people never take - deciding to examine their path intentionally rather than just following the current.\n\nYou are **${personalityType}**. ${personalityDesc}\n\n${behaviorNote}\n\nBefore I offer any guidance, I want to ask you something meaningful:\n\n*"${goal}" - is this truly YOUR goal? Or is it what you believe you should want based on what people around you have achieved?*\n\nThere is no wrong answer. But your answer will determine everything about how we work together.`
+  };
+
+  const msg = greetings[persona] || greetings['friend'];
+  messages.push({role:'assistant',content:msg,model:'openai',reason:'Personalized opening based on your full profile'});
+  appendBubble('assistant',msg,'openai','Personalized to your profile & personality');
+  saveMessages();
+}
+
+function showDailyCheckin(){
+  const checkinPrompts = [
+    `Good to see you back, ${profile.name}!  ${profile.streak} day streak. What's on your mind today?`,
+    `Welcome back! How did yesterday's goals go?`,
+    `${profile.name}, you're building momentum. What are you working on today?`
+  ];
+  const text = checkinPrompts[Math.floor(Math.random()*checkinPrompts.length)];
+  const div = document.createElement('div');
+  div.className = 'checkin-card';
+  div.innerHTML = `
+    <div class="checkin-title">Daily Check-in</div>
+    <div class="checkin-text">${text}</div>
+    <div class="checkin-btns">
+      <div class="checkin-btn" onclick="sendQuick('I made progress yesterday!')"> Made progress</div>
+      <div class="checkin-btn" onclick="sendQuick('I struggled yesterday, need help')"> Struggled</div>
+      <div class="checkin-btn" onclick="sendQuick('New challenge today, need guidance')"> New challenge</div>
+    </div>`;
+  document.getElementById('messages').appendChild(div);
+  scrollDown();
+}
+
+function sendQuick(text){
+  document.getElementById('user-input').value = text;
+  sendMessage();
+}
+
+
+// ===============================================================
+// STUDY TOGETHER MODE
+// ===============================================================
+
+function activateStudyMode(topic, style, days){
+  studyMode.active = true;
+  studyMode.topic = topic;
+  studyMode.style = style;
+  studyMode.totalDays = days || 30;
+  studyMode.currentDay = 1;
+  studyMode.todayComplete = false;
+  saveStudyMode();
+  renderStudyBanner();
+}
+
+function renderStudyBanner(){
+  const banner = document.getElementById('study-banner');
+  if(!banner) return;
+  if(!studyMode.active){ banner.style.display='none'; return; }
+  banner.style.display = 'block';
+  banner.innerHTML = `
+    <div class="study-mode-banner">
+      <div class="study-mode-info">
+        <div class="study-mode-dot"></div>
+        <div>
+          <div class="study-mode-text"> Study Mode: ${studyMode.topic}</div>
+          <div class="study-mode-sub">Day ${studyMode.currentDay} of ${studyMode.totalDays}  ${studyMode.style === 'daily' ? 'Daily buddy mode' : 'Full roadmap mode'}</div>
+        </div>
+      </div>
+      <button class="study-end-btn" onclick="endStudyMode()">End session</button>
+    </div>`;
+}
+
+function endStudyMode(){
+  if(!confirm('End this study session? Your progress is saved.')) return;
+  studyMode.active = false;
+  studyMode.topic = '';
+  saveStudyMode();
+  renderStudyBanner();
+  addSystemMessage('Study session ended. Come back tomorrow to continue! ');
+}
+
+function saveStudyMode(){
+  localStorage.setItem('sparkmate_study', JSON.stringify(studyMode));
+  if(currentUser){
+    sb.from('user_profiles').upsert({
+      id: currentUser.id,
+      study_topic: studyMode.topic,
+      study_day: studyMode.currentDay,
+      study_active: studyMode.active
+    }).catch(()=>{});
+  }
+}
+
+function loadStudyMode(){
+  const saved = localStorage.getItem('sparkmate_study');
+  if(saved){
+    try{ studyMode = {...studyMode, ...JSON.parse(saved)}; }catch(e){}
+  }
+  renderStudyBanner();
+}
+
+function addSystemMessage(text){
+  const div = document.createElement('div');
+  div.style.cssText = 'text-align:center;font-size:12px;color:var(--muted);padding:8px 16px;margin:4px 0';
+  div.textContent = text;
+  document.getElementById('messages').appendChild(div);
+  scrollDown();
+}
+
+// -- STUDY TOGETHER SYSTEM PROMPT INJECTION -------------------
+function getStudyModeContext(){
+  if(!studyMode.active) return '';
+  
+  return `
+============================================
+STUDY TOGETHER MODE - ACTIVE
+============================================
+The student is currently in "Study Together" mode.
+Topic: ${studyMode.topic}
+Current Day: ${studyMode.currentDay} of ${studyMode.totalDays}
+Study Style: ${studyMode.style === 'daily' ? 'Daily buddy - one day at a time' : 'Full roadmap'}
+Student Learning Style: ${profile.learnStyle || 'not specified'}
+
+YOUR ROLE AS STUDY BUDDY:
+You are not just answering questions - you are TEACHING alongside the student today.
+
+TODAY'S APPROACH:
+${studyMode.style === 'daily' ? `
+- Focus ONLY on what can be learned/practiced TODAY in 30-45 minutes
+- Never dump the entire roadmap - reveal ONE day at a time
+- End every study session with: what was learned today, what comes tomorrow, and an encouraging sign-off
+- If student asks "what's next?" -> give tomorrow's preview but say "let's master today first"
+- Always check if they understood before moving on: "Try this quick exercise" or "Explain this back to me in your own words"
+` : `
+- Student wants the full roadmap - give it structured by weeks
+- But still check in daily and guide them through each step
+`}
+
+TEACHING STYLE BASED ON LEARNING PROFILE:
+${(profile.learnStyle||'').includes('doing') || (profile.learnStyle||'').includes('project') ? `
+KINESTHETIC LEARNER - TEACH BY DOING:
+- Give a hands-on mini exercise or challenge for every concept
+- "Before I explain, try this: [exercise]"
+- Recommend: specific projects to build, LeetCode problems, coding challenges
+- Theory comes AFTER they've tried, not before
+` : (profile.learnStyle||'').includes('listen') ? `
+AUDITORY LEARNER - TEACH BY EXPLAINING:
+- Explain concepts conversationally, like talking over coffee
+- "Imagine I'm explaining this at a whiteboard..."
+- Recommend: specific YouTube videos, podcasts - always with timestamps
+- Use analogies and stories heavily
+` : `
+VISUAL/READING LEARNER - TEACH BY STRUCTURE:
+- Give clear written breakdowns with headers and steps
+- Use comparison tables, before/after examples
+- Recommend: specific articles, documentation, illustrated guides
+- Draw concepts in text: "Picture it like this: [ASCII diagram or description]"
+`}
+
+EMOTIONAL CHECK BEFORE TEACHING:
+- Always start a session by sensing their energy: "How are you feeling about today's session?"
+- If they seem stressed/overwhelmed -> shrink the goal: "Let's just do 15 minutes today. One concept."
+- If they're energised -> push them a bit further than planned
+- Never make them feel behind. "You're exactly where you need to be."
+
+DAILY SESSION STRUCTURE:
+1. Quick energy check (1 message)
+2. Recap yesterday briefly (if Day 2+)
+3. Introduce today's concept with a hook - make them curious
+4. Teach it in their style
+5. Give an exercise/challenge to test understanding
+6. Celebrate completion + preview tomorrow
+7. Sign off warmly: "See you tomorrow, [name]. You showed up today - that's the hardest part."
+`;
+}
+
+// -- DETECT STUDY INTENT IN MESSAGE ---------------------------
+function detectStudyIntent(msg){
+  const l = msg.toLowerCase();
+  
+  // NEVER trigger study mode if user is talking about their startup/business/project
+  const businessContext = ['startup','business','company','founder','building a','built a','working on','my idea','my product','my app','my project','client','customer','market','funding','investor','pitch','team','co-founder','revenue','users'];
+  if(businessContext.some(k => l.includes(k))) return false;
+  
+  // NEVER trigger for emotional/personal messages
+  const emotionalContext = ['feeling','feel','struggling','stuck','failing','failed','family','pressure','stress','worried','anxious','help me','support','motivation','lost','confused'];
+  if(emotionalContext.some(k => l.includes(k))) return false;
+  
+  // Only trigger when user is EXPLICITLY asking to study something for THEMSELVES
+  const explicitStudy = ['i want to learn','help me learn','teach me','i want to study','lets study','study with me','my roadmap','learning roadmap','i need to learn','how do i learn','where do i start learning'];
+  return explicitStudy.some(k => l.includes(k));
+}
+
+// -- SHOW STUDY MODE CHOICE CARD ------------------------------
+function showStudyChoiceCard(topic){
+  const div = document.createElement('div');
+  div.className = 'study-day-card';
+  div.innerHTML = `
+    <div class="study-day-header"> Study Mode Detected</div>
+    <div class="study-day-title">How do you want to learn "${topic}"?</div>
+    <p style="font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:4px">I can give you everything at once, or we can study together daily - like a real class.</p>
+    <div class="study-choice-row">
+      <button class="study-choice" onclick="startStudyTogether('${topic.replace(/'/g,"\'")}', 'daily')"> Study with me daily<br><span style="font-size:11px;color:var(--muted)">30 min/day  I'll guide you step by step</span></button>
+      <button class="study-choice" onclick="startStudyTogether('${topic.replace(/'/g,"\'")}', 'fullroadmap')"> Give me the full roadmap<br><span style="font-size:11px;color:var(--muted)">Complete plan  You go at your own pace</span></button>
+    </div>`;
+  document.getElementById('messages').appendChild(div);
+  scrollDown();
+}
+
+async function startStudyTogether(topic, style){
+  // Remove the choice card
+  document.querySelectorAll('.study-day-card').forEach(c => c.remove());
+  
+  activateStudyMode(topic, style, 30);
+  
+  const text = style === 'daily'
+    ? `Let's study "${topic}" together, one day at a time. Start Day 1 with me.`
+    : `Give me the full roadmap for "${topic}"`;
+  
+  document.getElementById('user-input').value = text;
+  sendMessage();
+}
+
+async function sendMessage(){
+  const text = document.getElementById('user-input').value.trim();
+  if(!text||isLoading) return;
+  const hasKey = profile.keys.claude||profile.keys.openai||profile.keys.gemini;
+  if(!hasKey){ alert('No API keys found. Please reset and add keys.'); return; }
+
+  const userMsg = {role:'user',content:text};
+  messages.push(userMsg);
+  saveMessageToSupabase(userMsg);
+  appendBubble('user',text);
+  document.getElementById('user-input').value='';
+  document.getElementById('user-input').style.height='auto';
+  
+  setLoading(true);
+
+  showRouteStatus('Thinking...');
+  try{
+    // Detect emotion from message
+    try {
+      const emotionRes = await fetch('/api/emotion', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ message: text, history: messages.slice(-4) })
+      });
+      const emotionData = await emotionRes.json();
+      if (emotionData.detected) {
+        window._lastEmotion = emotionData.emotion;
+        profile.currentEmotion = emotionData.emotion;
+        showRouteStatus(`Detected: ${emotionData.emotion} (${emotionData.confidence}% confidence)`);
+      } else {
+        window._lastEmotion = 'neutral';
+      }
+    } catch(e) { window._lastEmotion = 'neutral'; }
+
+    const typId = showTyping();
+    let reply;
+    reply = await callOpenAI(messages.slice(-10)); // send last 10 only - prevents old context confusion
+    removeTyping(typId);
+    hideRouteStatus();
+    const aiMsg = {role:'assistant',content:reply,model:'openai',reason:'Powered by Tavily + OpenAI'};
+    messages.push(aiMsg);
+    // Show detected emotion in label if available
+    const emotionLabel = reply && window._lastEmotion && window._lastEmotion !== 'neutral'
+      ? `Powered by Tavily + OpenAI  Detected: ${window._lastEmotion}`
+      : 'Powered by Tavily + OpenAI';
+    // Remove stream bubble if it exists (appendBubble will show the final formatted version)
+    const streamBubbles = document.querySelectorAll('.stream-bubble');
+    streamBubbles.forEach(b => b.remove());
+    appendBubble('assistant',reply,'openai', emotionLabel);
+    saveMessages();
+    saveMessageToSupabase(aiMsg);
+    addXP(15);
+    // Save memory every 5 messages
+    if (messages.length % 5 === 0) {
+      saveMemory();
+    }
+    triggerLogIfNeeded();
+  }catch(err){
+    hideRouteStatus();
+    showError('Error: '+err.message);
+  }
+  setLoading(false);
+}
+
+// ===============================================================
+// AI ROUTING & CALLS
+// ===============================================================
+async function routeQuery(msg){
+  try{
+    const res = await fetch('/api/chat',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model:'router', system:ROUTER_SYSTEM, messages:[{role:'user',content:msg}]})
+    });
+    const d = await res.json();
+    if(d.error) throw new Error(d.error);
+    const text = d.reply || '{}';
+    const parsed = JSON.parse(text.replace(/```json|```/g,'').trim());
+    if(parsed.model) return parsed;
+    throw new Error('No model in response');
+  }catch(e){
+    // Smart keyword fallback - works with any single key
+    const l=msg.toLowerCase();
+    // All queries go to OpenAI - Tavily handles live web search
+    if(l.includes('code')||l.includes('python')||l.includes('javascript')||l.includes('learn')||l.includes('skill')) return{model:'openai',reason:'Technical query'};
+    return{model:'openai',reason:'Default - OpenAI'};
+  }
+}
+
+// -- ALL API CALLS GO THROUGH SECURE VERCEL BACKEND ----------
+// No API keys in the frontend. Ever.
+async function callProxy(model, msgs){
+  const res = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      type: 'roadmap',
-      schedule_id: scheduleId,
-      context: {
-        name:          userName,
-        email:         userEmail,
-        goal:          trigger.goal,
-        topic:         trigger.topic,
-        timeline_days: trigger.timeline_days,
-        learning_style: learningStyle,
-        personality:   personality,
-        current_level: 'as discussed'
+      model,
+      messages: msgs.map(m=>({role:m.role, content:m.content})),
+      system: buildSystemPrompt(),
+      max_tokens: 1024,
+      profile: {
+        name:             profile.name             || '',
+        personality_type: profile.personalityType  || 'The Grower',
+        learning_style:   profile.learnStyle       || 'visual',
+        academic_level:   profile.role             || 'Student',
+        exam_target:      profile.goal             || 'CBSE',
+        current_emotion:  profile.currentEmotion   || 'neutral',
+        weak_subjects:    profile.weakSubjects      || [],
+        strong_subjects:  profile.strongSubjects    || []
       }
     })
   });
+  if(!res.ok){ const e = await res.json().catch(()=>({})); throw new Error(e.error||'Server error'); }
+  const data = await res.json();
+  return data.content || data.reply || '';
+}
 
-  // If interview/exam is very soon (≤2 days), also send glossary immediately
-  if (trigger.timeline_days <= 2) {
-    await fetch(`${baseUrl}/api/mentor-email`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'glossary',
-        context: {
-          name:         userName,
-          email:        userEmail,
-          goal:         trigger.goal,
-          topic:        trigger.topic,
-          days_until:   trigger.timeline_days,
-          learning_style: learningStyle
-        }
-      })
+// Create a streaming bubble in the chat
+function createStreamBubble() {
+  const chatEl = document.getElementById('chatMessages') || document.querySelector('.chat-messages') || document.querySelector('[id*="chat"]');
+  if (!chatEl) return null;
+
+  const bubble = document.createElement('div');
+  bubble.className = 'stream-bubble';
+  bubble.style.cssText = `
+    background: var(--card-bg, #1a1a2e);
+    border: 1px solid var(--border, #333);
+    border-radius: 12px;
+    padding: 16px;
+    margin: 8px 0;
+    max-width: 85%;
+    color: var(--text, #fff);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  `;
+  chatEl.appendChild(bubble);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  return bubble;
+}
+
+// Update streaming bubble with new content
+function updateStreamBubble(bubble, content) {
+  if (!bubble) return;
+  // Convert markdown-style bold to HTML
+  const formatted = content
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>');
+  bubble.innerHTML = formatted + '<span class="cursor" style="animation:blink 1s infinite"></span>';
+  const chatEl = bubble.parentElement;
+  if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+async function callClaude(msgs){ return callProxy('claude', msgs); }
+async function callOpenAI(msgs){ return callProxy('openai', msgs); }
+async function callGemini(msgs){ return callProxy('gemini', msgs); }
+
+// ===============================================================
+// VOICE
+// ===============================================================
+function toggleVoice(){
+  if(!('webkitSpeechRecognition' in window||'SpeechRecognition' in window)){alert('Voice not supported in this browser. Try Chrome.');return;}
+  if(isRecording){stopVoice();return;}
+  const SR = window.SpeechRecognition||window.webkitSpeechRecognition;
+  recognition = new SR();
+  recognition.continuous = false;
+  recognition.interimResults = true;
+  recognition.lang = 'en-US';
+  recognition.onstart=()=>{isRecording=true;document.getElementById('voice-btn').classList.add('recording');};
+  recognition.onresult=e=>{
+    const transcript = Array.from(e.results).map(r=>r[0].transcript).join('');
+    document.getElementById('user-input').value = transcript;
+  };
+  recognition.onend=()=>{isRecording=false;document.getElementById('voice-btn').classList.remove('recording');};
+  recognition.onerror=()=>{isRecording=false;document.getElementById('voice-btn').classList.remove('recording');};
+  recognition.start();
+}
+
+function stopVoice(){if(recognition){recognition.stop();isRecording=false;document.getElementById('voice-btn').classList.remove('recording');}}
+
+// ===============================================================
+// DOM HELPERS
+// ===============================================================
+function renderMessages(){
+  const wrap = document.getElementById('messages');
+  wrap.innerHTML='';
+  messages.forEach(m=>appendBubble(m.role,m.content,m.model,m.reason));
+}
+
+function appendBubble(role,text,model,reason){
+  const wrap = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = `message ${role==='assistant'?'ai':'user'}`;
+  const av = document.createElement('div');
+  av.className = `msg-avatar ${role==='assistant'?'ai-av':'user-av'}`;
+  av.textContent = role==='assistant'?'':((profile&&profile.name&&profile.name.length>0)?profile.name[0].toUpperCase():'U');
+  const mw = document.createElement('div');
+  mw.className = 'msg-wrap';
+  const b = document.createElement('div');
+  b.className = 'bubble';
+  b.innerHTML = fmt(text);
+  mw.appendChild(b);
+  if(role==='assistant'&&model){
+    const tag = document.createElement('div');
+    tag.className = `model-tag ${model}`;
+    tag.innerHTML = `<span class="mdot"></span>${modelLabel(model)}${reason?`  <span style="opacity:0.65;font-weight:300">${reason}</span>`:''}`;
+    mw.appendChild(tag);
+  }
+  div.appendChild(av);div.appendChild(mw);
+  wrap.appendChild(div);
+  scrollDown();
+}
+
+function fmt(t){
+  // -- TABLE RENDERING --------------------------------------
+  t = t.replace(/(\|.+\|\n)(\|[-| :]+\|\n)((\|.+\|\n?)+)/g, (match, header, separator, body) => {
+    const headers = header.split('|').filter(c=>c.trim()).map(c=>`<th>${c.trim()}</th>`).join('');
+    const rows = body.trim().split('\n').map(row => {
+      const cells = row.split('|').filter(c=>c.trim()).map(c=>`<td>${c.trim()}</td>`).join('');
+      return `<tr>${cells}</tr>`;
+    }).join('');
+    return `<div class="tbl-wrap"><table class="md-table"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  });
+
+  return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/&lt;(div|table|thead|tbody|tr|th|td|strong|em|h3|li|ul|code|hr|p|br)(.*?)&gt;/g,'<$1$2>')
+    .replace(/&lt;\/(div|table|thead|tbody|tr|th|td|strong|em|h3|li|ul|code|hr|p|br)&gt;/g,'</$1>')
+    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,'<em>$1</em>')
+    .replace(/^###\s(.+)$/gm,'<h3>$1</h3>')
+    .replace(/^##\s(.+)$/gm,'<h3>$1</h3>')
+    .replace(/^- (.+)$/gm,'<li>$1</li>')
+    .replace(/(<li>.*<\/li>\n?)+/g,m=>`<ul>${m}</ul>`)
+    .replace(/^\d+\.\s(.+)$/gm,'<li>$1</li>')
+    .replace(/^---$/gm,'<hr/>')
+    .replace(/`(.+?)`/g,'<code>$1</code>')
+    .replace(/\n\n/g,'</p><p>')
+    .replace(/\n/g,'<br/>')
+    .replace(/^(.+)$/,'<p>$1</p>');
+}
+
+function modelLabel(m){return{claude:'Claude',openai:'GPT-4o',gemini:'Gemini'}[m]||(m||'AI');}
+
+let tc=0;
+function showTyping(){
+  const id='t'+(++tc);
+  const wrap=document.getElementById('messages');
+  const d=document.createElement('div');d.className='message ai';d.id=id;
+  const a=document.createElement('div');a.className='msg-avatar ai-av';a.textContent='';
+  const mw=document.createElement('div');mw.className='msg-wrap';
+  const b=document.createElement('div');b.className='bubble';
+  b.innerHTML='<div class="typing-ind"><div class="tdot"></div><div class="tdot"></div><div class="tdot"></div></div>';
+  mw.appendChild(b);d.appendChild(a);d.appendChild(mw);wrap.appendChild(d);scrollDown();return id;
+}
+function removeTyping(id){const e=document.getElementById(id);if(e)e.remove();}
+function showRouteStatus(msg){document.getElementById('route-msg').textContent=msg;document.getElementById('route-status').classList.add('on');}
+function hideRouteStatus(){setTimeout(()=>document.getElementById('route-status').classList.remove('on'),1500);}
+function showError(msg){const wrap=document.getElementById('messages');const e=document.createElement('div');e.className='error-msg';e.textContent=msg;wrap.appendChild(e);scrollDown();}
+function setLoading(v){
+  isLoading=v;
+  const btn = document.getElementById('send-btn');
+  const label = btn?.querySelector('.send-label');
+  btn.disabled=v;
+  if(v){
+    if(label) label.textContent = '...';
+    setInputStatus('Mentor is thinking...');
+  } else {
+    if(label) label.textContent = 'Send';
+    setInputStatus('');
+  }
+}
+function scrollDown(){document.getElementById('chat-container').scrollTop=document.getElementById('chat-container').scrollHeight;}
+
+// ===============================================================
+// PERSISTENCE
+// ===============================================================
+function saveProfile(){
+  localStorage.setItem('mentorProfile',JSON.stringify(profile));
+  saveProfileToSupabase(); // sync to Supabase silently
+}
+function saveMessages(){
+  localStorage.setItem('mentorMessages',JSON.stringify(messages.slice(-40)));
+}
+
+function toggleSettings(){
+  alert("MentorAI v" + APP_VERSION + "\n\nAll AI models (Claude, GPT-4o, Gemini) are connected securely.\nYour profile and progress are saved on this device.\n\nStreak: " + (profile.streak||0) + " days | Level: " + (profile.level||1) + " | XP: " + (profile.xp||0));
+}
+
+function resetAll(){
+  if(confirm('Reset everything and start fresh?')){
+    localStorage.removeItem('mentorProfile');
+    localStorage.removeItem('mentorMessages');
+    location.reload();
+  }
+}
+
+// ===============================================================
+// GOOGLE SHEET LOGGING - SILENT ADMIN ANALYTICS
+// ===============================================================
+const WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbyZ3XK7sPBMOjtZ2wDX6bx1-wTk1QXY3gF9R_7mq8gf5DuvHRvAuWoSF0ymDeHpM7unfA/exec';
+const sessionStart = Date.now();
+
+function getTopics(){
+  // Extract topics from user messages by scanning keywords
+  const userMsgs = messages.filter(m=>m.role==='user').map(m=>m.content.toLowerCase()).join(' ');
+  const topicMap = {
+    'Python/Coding': ['python','code','coding','programming','function','bug','error','syntax'],
+    'Career': ['career','job','interview','resume','salary','promotion','switch'],
+    'Goals': ['goal','plan','roadmap','target','achieve','milestone'],
+    'Learning': ['learn','study','skill','course','book','resource'],
+    'Mindset': ['frustrated','stuck','confused','anxious','fear','confidence','motivation'],
+    'Business': ['startup','business','entrepreneur','product','market','customer'],
+    'Education': ['college','exam','degree','marks','subject','university'],
+  };
+  const found = [];
+  Object.entries(topicMap).forEach(([topic, keywords])=>{
+    if(keywords.some(k=>userMsgs.includes(k))) found.push(topic);
+  });
+  return found.length ? found.join(', ') : 'General';
+}
+
+function getModelsUsed(){
+  const models = [...new Set(messages.filter(m=>m.model).map(m=>m.model))];
+  return models.map(m=>({claude:'Claude',openai:'GPT-4o',gemini:'Gemini'}[m]||m)).join(', ') || 'None';
+}
+
+function getSentiment(){
+  const userMsgs = messages.filter(m=>m.role==='user').map(m=>m.content.toLowerCase()).join(' ');
+  const negative = ['frustrated','stuck','confused','failed','cant','can\'t','struggling','lost','anxious','hopeless','bad','worst','difficult'];
+  const positive = ['thanks','thank you','great','awesome','helpful','makes sense','got it','understand','better','clear','excited','motivated'];
+  const negCount = negative.filter(w=>userMsgs.includes(w)).length;
+  const posCount = positive.filter(w=>userMsgs.includes(w)).length;
+  if(posCount > negCount) return 'Positive';
+  if(negCount > posCount) return 'Frustrated';
+  return 'Neutral';
+}
+
+async function logToSheet(eventType='session_update'){
+  if(!profile.name) return; // don't log incomplete profiles
+  try{
+    const sessionDuration = Math.round((Date.now()-sessionStart)/60000); // minutes
+    const payload = {
+      eventType,
+      userName: profile.name,
+      personalityType: profile.personalityType || 'Not assessed',
+      persona: profile.persona || 'Not chosen',
+      role: profile.role || '',
+      goal: profile.goal || '',
+      timeline: profile.timeline || '',
+      learnStyle: profile.learnStyle || '',
+      totalMessages: messages.filter(m=>m.role==='user').length,
+      topicsDiscussed: getTopics(),
+      modelsUsed: getModelsUsed(),
+      sentiment: getSentiment(),
+      sessionDuration: sessionDuration + ' mins',
+      xpLevel: profile.level || 1,
+      streak: profile.streak || 0,
+      lastMessage: messages.filter(m=>m.role==='user').slice(-1)[0]?.content?.substring(0,100) || '',
+      timestamp: new Date().toISOString(),
+      sessionId: profile.sessionId || 'unknown'
+    };
+    // Fire and forget - don't block UI
+    fetch(WEBHOOK_URL, {
+      method:'POST',
+      mode:'no-cors', // Google Apps Script requires no-cors
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
     });
-    console.log('[PROACTIVE] Sent urgent glossary for', trigger.topic);
+  }catch(e){
+    // Fail silently - never interrupt the user experience
+  }
+}
+
+// Log on session start, every 5 messages, and on page unload
+let msgCountForLog = 0;
+function triggerLogIfNeeded(){
+  msgCountForLog++;
+  if(msgCountForLog % 5 === 0) logToSheet('message_milestone');
+}
+window.addEventListener('beforeunload', ()=>logToSheet('session_end'));
+
+// ===============================================================
+// HIDDEN ADMIN PANEL
+// ===============================================================
+const ADMIN_PASSWORD = 'mentorai2024'; // Change this to your own password
+let adminUnlocked = false;
+let adminKeyBuffer = '';
+
+// Secret keyboard shortcut: type "admin" anywhere to trigger password prompt
+document.addEventListener('keydown', e=>{
+  if(document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT') return;
+  adminKeyBuffer += (e.key || '').toLowerCase();
+  if(adminKeyBuffer.length > 5) adminKeyBuffer = adminKeyBuffer.slice(-5);
+  if(adminKeyBuffer === 'admin') openAdminPanel();
+});
+
+function openAdminPanel(){
+  if(!adminUnlocked){
+    const pwd = prompt(' Admin Access - Enter Password:');
+    if(pwd !== ADMIN_PASSWORD){ alert('Wrong password.'); adminKeyBuffer=''; return; }
+    adminUnlocked = true;
+  }
+  showAdminDashboard();
+}
+
+function showAdminDashboard(){
+  // Gather all data from localStorage across all "users" on this device
+  const allSessions = [];
+  for(let i=0; i<localStorage.length; i++){
+    const key = localStorage.key(i);
+    if(key === 'mentorProfile'){
+      try{
+        const p = JSON.parse(localStorage.getItem(key));
+        const msgs = JSON.parse(localStorage.getItem('mentorMessages')||'[]');
+        allSessions.push({profile:p, messages:msgs});
+      }catch(e){}
+    }
   }
 
-  console.log('[PROACTIVE] ✅ Full proactive sequence triggered for', userName);
+  const p = profile;
+  const userMsgs = messages.filter(m=>m.role==='user');
+  const aiMsgs = messages.filter(m=>m.role==='assistant');
+  const modelCounts = {};
+  aiMsgs.forEach(m=>{ if(m.model) modelCounts[m.model]=(modelCounts[m.model]||0)+1; });
+
+  const panel = document.createElement('div');
+  panel.id = 'admin-panel';
+  panel.style.cssText = `position:fixed;inset:0;z-index:9999;background:rgba(8,10,15,0.97);overflow-y:auto;padding:32px 24px;font-family:'Outfit',sans-serif;color:#ede9e0;`;
+  panel.innerHTML = `
+    <div style="max-width:900px;margin:0 auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:32px">
+        <div>
+          <div style="font-family:'Cormorant Garamond',serif;font-size:32px;font-weight:700;color:#e8c87a">Admin Dashboard</div>
+          <div style="font-size:13px;color:#6b7280;margin-top:4px">MentorAI - Founder View  ${new Date().toDateString()}</div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <button onclick="exportCSV()" style="background:#e8c87a;color:#080a0f;border:none;border-radius:10px;padding:10px 20px;font-size:13px;font-weight:600;cursor:pointer;font-family:'Outfit',sans-serif"> Export CSV</button>
+          <button onclick="document.getElementById('admin-panel').remove();adminUnlocked=false;" style="background:transparent;border:1px solid rgba(255,255,255,0.1);color:#6b7280;border-radius:10px;padding:10px 20px;font-size:13px;cursor:pointer;font-family:'Outfit',sans-serif"> Close</button>
+        </div>
+      </div>
+
+      <!-- STATS ROW -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:28px">
+        ${statCard('Total Messages', userMsgs.length, '#e8c87a')}
+        ${statCard('AI Responses', aiMsgs.length, '#5ba4cf')}
+        ${statCard('XP Level', 'Level ' + (p.level||1), '#7dd3a8')}
+        ${statCard('Day Streak', (p.streak||0) + ' days', '#e0a870')}
+        ${statCard('Session Time', Math.round((Date.now()-sessionStart)/60000) + ' mins', '#a78bfa')}
+        ${statCard('Sentiment', getSentiment(), getSentiment()==='Positive'?'#7dd3a8':getSentiment()==='Frustrated'?'#e07070':'#6b7280')}
+      </div>
+
+      <!-- USER PROFILE -->
+      <div style="background:#0f1219;border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:20px;margin-bottom:20px">
+        <div style="font-size:12px;color:#e8c87a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:14px">User Profile</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;font-size:13px">
+          ${profileRow('Name', p.name)}
+          ${profileRow('Personality', (p.personalityType||'?') + ' ' + (p.personalityEmoji||''))}
+          ${profileRow('Role', p.role||'?')}
+          ${profileRow('Goal', p.goal||'?')}
+          ${profileRow('Timeline', p.timeline||'?')}
+          ${profileRow('Learn Style', p.learnStyle||'?')}
+          ${profileRow('Mentor Persona', p.persona||'?')}
+          ${profileRow('Topics', getTopics())}
+          ${profileRow('Models Used', getModelsUsed())}
+        </div>
+      </div>
+
+      <!-- AI MODEL USAGE -->
+      <div style="background:#0f1219;border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:20px;margin-bottom:20px">
+        <div style="font-size:12px;color:#e8c87a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:14px">AI Model Usage</div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap">
+          ${Object.entries(modelCounts).map(([m,c])=>`
+            <div style="background:#161b25;border-radius:10px;padding:12px 18px;text-align:center">
+              <div style="font-size:22px;font-weight:700;color:${{claude:'#e8c87a',openai:'#7dd3a8',gemini:'#5ba4cf'}[m]||'#fff'}">${c}</div>
+              <div style="font-size:11px;color:#6b7280;margin-top:2px">${{claude:'Claude',openai:'GPT-4o',gemini:'Gemini'}[m]||m}</div>
+            </div>`).join('')}
+          ${Object.keys(modelCounts).length===0?'<div style="color:#6b7280;font-size:13px">No AI responses yet</div>':''}
+        </div>
+      </div>
+
+      <!-- FULL CHAT LOG -->
+      <div style="background:#0f1219;border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:20px">
+        <div style="font-size:12px;color:#e8c87a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:14px">Full Chat Log (${messages.length} messages)</div>
+        <div style="max-height:400px;overflow-y:auto;display:flex;flex-direction:column;gap:10px">
+          ${messages.map((m,i)=>`
+            <div style="background:#161b25;border-radius:10px;padding:12px 14px;border-left:3px solid ${m.role==='user'?'#5ba4cf':'#e8c87a'}">
+              <div style="font-size:10px;color:#6b7280;margin-bottom:5px;display:flex;justify-content:space-between">
+                <span>${m.role==='user'?' '+p.name:' MentorAI'+(m.model?' ('+m.model+')':'')}</span>
+                <span>#${i+1}</span>
+              </div>
+              <div style="font-size:13px;line-height:1.6;color:#ede9e0">${(m.content||'').substring(0,300)}${m.content?.length>300?'...':''}</div>
+            </div>`).join('')}
+          ${messages.length===0?'<div style="color:#6b7280;font-size:13px">No messages yet</div>':''}
+        </div>
+      </div>
+
+      <div style="text-align:center;margin-top:20px;font-size:11px;color:#4b5563">
+        Type "admin" anywhere (outside input boxes) to reopen this panel  Password: ${ADMIN_PASSWORD}
+      </div>
+    </div>`;
+  document.body.appendChild(panel);
 }
 
-async function callGemini(messages, system) {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) throw new Error('GEMINI_API_KEY not configured');
-
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: system }] },
-        contents: messages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
-        generationConfig: { maxOutputTokens: 1200, temperature: 0.7 }
-      })
-    }
-  );
-
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message);
-  return { content: data.candidates[0].content.parts[0].text, model: 'gemini' };
+function statCard(label, value, color){
+  return `<div style="background:#0f1219;border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:16px;text-align:center">
+    <div style="font-size:22px;font-weight:700;color:${color}">${value}</div>
+    <div style="font-size:11px;color:#6b7280;margin-top:3px">${label}</div>
+  </div>`;
 }
+
+function profileRow(label, value){
+  return `<div style="background:#161b25;border-radius:8px;padding:10px 12px">
+    <div style="font-size:10px;color:#6b7280;margin-bottom:3px">${label}</div>
+    <div style="font-size:13px;color:#ede9e0;font-weight:500">${value||'-'}</div>
+  </div>`;
+}
+
+function exportCSV(){
+  const p = profile;
+  const headers = ['Timestamp','Name','Personality','Persona','Role','Goal','Timeline','LearnStyle','TotalMessages','Topics','ModelsUsed','Sentiment','XPLevel','Streak','SessionMins','LastMessage'];
+  const row = [
+    new Date().toISOString(),
+    p.name, p.personalityType, p.persona, p.role, p.goal, p.timeline, p.learnStyle,
+    messages.filter(m=>m.role==='user').length,
+    getTopics(), getModelsUsed(), getSentiment(),
+    p.level, p.streak,
+    Math.round((Date.now()-sessionStart)/60000),
+    (messages.filter(m=>m.role==='user').slice(-1)[0]?.content||'').replace(/,/g,' ').substring(0,200)
+  ];
+
+  // Also add full chat log rows
+  const chatHeaders = ['#','Role','Model','Message'];
+  const chatRows = messages.map((m,i)=>[i+1, m.role, m.model||'', (m.content||'').replace(/,/g,' ').replace(/\n/g,' ').substring(0,500)]);
+
+  let csv = '=== SESSION SUMMARY ===\n';
+  csv += headers.join(',') + '\n';
+  csv += row.map(v=>`"${v}"`).join(',') + '\n\n';
+  csv += '=== FULL CHAT LOG ===\n';
+  csv += chatHeaders.join(',') + '\n';
+  csv += chatRows.map(r=>r.map(v=>`"${v}"`).join(',')).join('\n');
+
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `mentorai_${p.name||'user'}_${new Date().toISOString().split('T')[0]}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ===============================================================
+// TEXTAREA AUTO-RESIZE & KEYBOARD
+// ===============================================================
+const ta = document.getElementById('user-input');
+const charCounter = document.getElementById('char-counter');
+const MAX_CHARS = 2000;
+
+ta.addEventListener('input',()=>{
+  // Auto-resize
+  ta.style.height='auto';
+  ta.style.height=Math.min(ta.scrollHeight, 200)+'px';
+
+  // Character counter — only show when approaching limit
+  const len = ta.value.length;
+  if (len > MAX_CHARS * 0.7) {
+    charCounter.textContent = `${len}/${MAX_CHARS}`;
+    charCounter.classList.toggle('warn', len >= MAX_CHARS);
+  } else {
+    charCounter.textContent = '';
+    charCounter.classList.remove('warn');
+  }
+
+  // Enforce max length
+  if (len > MAX_CHARS) ta.value = ta.value.slice(0, MAX_CHARS);
+});
+
+ta.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}
+});
+
+// Focus input on page load when chat is visible
+ta.addEventListener('focus',()=>{
+  document.querySelector('.input-wrap')?.classList.add('focused');
+});
+ta.addEventListener('blur',()=>{
+  document.querySelector('.input-wrap')?.classList.remove('focused');
+});
+
+// ── Quick chip insertion ──────────────────────────────────────
+function insertChip(text) {
+  const current = ta.value.trim();
+  // If textarea already has text, don't overwrite — append chip context
+  ta.value = current ? current : text;
+  ta.focus();
+  // Move cursor to end
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+  ta.style.height='auto';
+  ta.style.height=Math.min(ta.scrollHeight,200)+'px';
+
+  // Highlight active chip briefly
+  document.querySelectorAll('.toolbar-chip').forEach(c => c.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+  setTimeout(()=>event.currentTarget?.classList.remove('active'), 800);
+}
+
+// ── Clear input ───────────────────────────────────────────────
+function clearInput() {
+  ta.value = '';
+  ta.style.height = 'auto';
+  charCounter.textContent = '';
+  charCounter.classList.remove('warn');
+  ta.focus();
+}
+
+// ── Input status line helper ──────────────────────────────────
+function setInputStatus(msg) {
+  const el = document.getElementById('input-status-text');
+  if (el) el.textContent = msg || '';
+}
+
+// ===============================================================
+// INIT
+// ===============================================================
+// -- INIT ON DOM READY ---------------------------------------
+function startApp() {
+  try {
+    // Hide all screens first
+    document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
+    // Show auth screen
+    document.getElementById('screen-auth').classList.remove('hidden');
+    switchTab('login');
+
+    // Check if user already has active session
+    sb.auth.getSession().then(({ data: { session } }) => {
+      if(session && session.user){
+        currentUser = session.user;
+        loadUserProfile();
+      }
+    }).catch(err => {
+      console.error('Session check failed:', err);
+    });
+
+    // Listen for auth changes
+    sb.auth.onAuthStateChange((event, session) => {
+      if(event === 'SIGNED_IN' && session){
+        currentUser = session.user;
+      }
+    });
+  } catch(err) {
+    console.error('App init error:', err);
+    // Fallback - show auth screen manually
+    document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
+    const authEl = document.getElementById('screen-auth');
+    if(authEl) authEl.classList.remove('hidden');
+  }
+}
+
+if(document.readyState === 'loading'){
+  document.addEventListener('DOMContentLoaded', startApp);
+} else {
+  startApp();
+}
+</script>
+</body>
+</html>
