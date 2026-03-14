@@ -409,12 +409,27 @@ function getClarification(message, intent, history, student) {
   if (subjectDoubt) {
     return `Which topic specifically, ${name}? And what's the exact part that's confusing — the concept itself or applying it to problems?`;
   }
+// ── EXAM PREP & STUDY PLANS — The Hard Gate (CBSE & General) ──
+  const isExamPrep = /gmat|cat|upsc|jee|neet|gate|clat|cbse|board|class 10|class 12/i.test(msg);
+  const wantsPlan = /plan|roadmap|prepare|preparation|schedule/i.test(msg);
 
-  // ── GMAT / CAT / exam prep — missing level and hours ────
-  const examPrep = /gmat|cat|upsc|jee|neet|gate|clat/i.test(msg);
-  const hasTimeline = /\d+\s*(month|week|day)/i.test(combined);
-  const hasLevel = /beginner|fresh|never|first time|gave before|appeared|7 year|years ago|previous|score was/i.test(combined);
-  const hasHours = /\d+\s*(hour|hr)|hour a day|per day/i.test(combined);
+  if (isExamPrep || wantsPlan) {
+    const hasTimeline = /\d+\s*(month|week|day)/i.test(combined);
+    const hasLevel = /beginner|fresh|scratch|basics|know|started/i.test(combined);
+    const hasHours = /\d+\s*(hour|hr)|hour a day|per day/i.test(combined);
+    const hasSpecifics = /chapter|topic|weak|struggle|math|science|physics|chem|geometry/i.test(combined);
+
+    // GATE 1: Check for Time
+    if (!hasHours || !hasTimeline) {
+      return `I'd love to help you crush this, ${name}! To make a plan that actually works, how much time do we have left until the exam, and how many hours a day can you realistically commit?`;
+    }
+
+    // GATE 2: Check for Focus Areas (Rapport Building)
+    if (!hasSpecifics && !hasLevel) {
+      return `Got it. Since we have a clear timeline, let's get specific: are you starting from scratch, or are there 2-3 chapters currently giving you the most trouble?`;
+    }
+  }
+}
 
   if (examPrep && hasTimeline && !hasLevel) {
     return `Got it, ${name}. Quick question before I build your plan — are you starting completely fresh, or have you studied for this before? And what score are you targeting?`;
