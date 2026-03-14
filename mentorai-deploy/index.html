@@ -2555,6 +2555,25 @@ async function sendMessage(){
     saveMessages();
     saveMessageToSupabase(aiMsg);
     addXP(15);
+
+    // Handle proactive mentor system response
+    if (replyMeta.proactive_action === 'schedule_created') {
+      setTimeout(() => {
+        const wrap = document.getElementById('messages');
+        const div = document.createElement('div');
+        div.className = 'message ai';
+        div.style.animation = 'fadeUp 0.3s ease both';
+        div.innerHTML = `
+          <div class="msg-avatar ai-av" style="font-size:16px">📧</div>
+          <div class="msg-wrap">
+            <div class="bubble" style="background:rgba(232,200,122,0.08);border-color:rgba(232,200,122,0.2)">
+              <p style="margin:0;color:var(--accent)">✅ Your personalised ${replyMeta.proactive_goal || 'learning'} roadmap has been sent to your email. Daily learning emails start tomorrow morning!</p>
+            </div>
+          </div>`;
+        wrap.appendChild(div);
+        scrollDown();
+      }, 1500);
+    }
     // Save memory every 5 messages
     if (messages.length % 5 === 0) {
       saveMemory();
@@ -2618,7 +2637,8 @@ async function callProxy(model, msgs){
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model,
-      user_id: currentUser?.id || null,
+      user_id:    currentUser?.id    || null,
+      user_email: currentUser?.email || profile.email || null,
       messages: msgs.map(m=>({role:m.role, content:m.content})),
       system: buildSystemPrompt(),
       max_tokens: 1024,
