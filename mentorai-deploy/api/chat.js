@@ -149,9 +149,7 @@ DO NOT reveal the answer.
 STOP after the question.`;
     }
     // ── DRILL DOWN INTERCEPTOR ────────────────────────────────
-    // Code enforces diagnosis before AI is called.
-    // Same approach as quiz interceptor — AI never gets a chance to skip.
-    const drillDown = getDrillDownQuestion(userMessage, messages, intent);
+    const drillDown = getDrillDownQuestion(userMessage, messages, intent, student);
     if (drillDown.needed) {
       return res.status(200).json({
         content: drillDown.question,
@@ -494,6 +492,11 @@ function detectIntent(message, student = {}, history = []) {
     // Only keep web search if message has clear current-events signal
     const hasCurrentEventsSignal = ['news','today','latest','current','2025','2026',
       'announced','launched','just released','this week'].some(k => msg.includes(k));
+    // FIX: coding/debugging messages must never trigger web search
+    const isCodingContext = ['bug','error','code','debug','crash','fix','function',
+      'variable','syntax','compile','runtime','exception','stack','array',
+      'sentence','grammar','paragraph','writing','essay'].some(k => msg.includes(k));
+    if (isCodingContext) signals.needsWebSearch = false;
     if (!hasCurrentEventsSignal) {
       signals.needsWebSearch = false;
     }
@@ -1423,6 +1426,30 @@ Topic: ${intent.subject || 'the requested subject'}
 ABSOLUTE RULE: Give exactly ONE question. Wait for their answer. Nothing else.`;
   }
 
+  // Sprint offer — OVERRIDE to enforce sprint after full diagnosis
+  if (intent._sprintInstruction) {
+    const name = student.name || 'there';
+    const style = student.learning_style || 'visual';
+    const styleHow = style === 'hands_on' ? 'start with something to DO or try'
+      : style === 'story' ? 'start with a real story or example'
+      : style === 'logical' ? 'start from first principles, show every step'
+      : 'paint a mental image first';
+    return 'You are ' + name + "'s personal mentor. You now know exactly what they need."
+      + ' Offer a sprint. Do not give a generic plan. Do not explain theory yet.\n\n'
+      + 'FORMAT:\n'
+      + '1. One sentence acknowledging what they need\n'
+      + '2. Offer two sprint options:\n'
+      + '   Sprint A — 1 hour — focused, one concept, 5 problems\n'
+      + '   Sprint B — 2 hours — deeper, two concepts, more practice\n'
+      + '3. Ask: "Which one fits today?"\n'
+      + '4. STOP. Wait for their answer.\n\n'
+      + 'When they pick a sprint:\n'
+      + '- Deliver content in their style: ' + style + ' — ' + styleHow + '\n'
+      + '- Then give problems ONE at a time. Wait for answer. Evaluate. Give next.\n'
+      + '- After all problems: score + one weak area + tomorrow preview + celebrate.\n\n'
+      + 'NEVER give a week-by-week plan. NEVER dump all content at once.';
+  }
+
   // Socratic intake - OVERRIDE everything with a simple, laser-focused prompt
   if (intent._socraticInstruction) {
     return `You are ${student.name}'s personal mentor. You are in the middle of understanding their situation before giving advice.
@@ -1987,138 +2014,129 @@ async function callGemini(messages, system) {
 
 // -------------------------------------------------------------
 // DRILL DOWN — CODE LEVEL ENFORCEMENT
-// Returns a question directly. AI never called until we have
-// all 3 things: what topic, what type of help, how much time.
-// Same philosophy as the quiz interceptor — code controls flow.
+// Three fixes from test results:
+// Fix 1 — Physics: check CURRENT message for topic, not memory
+// Fix 2 — Web search false trigger: handled above in detectIntent
+// Fix 3 — Sprint offer: after all 3 known, inject sprint instruction
 // -------------------------------------------------------------
-function getDrillDownQuestion(message, history, intent) {
+function getDrillDownQuestion(message, history, intent, student) {
   const msg = message.toLowerCase().trim();
 
-  // Skip drill down for:
-  // 1. Pure conversation / greetings
-  // 2. Emotional support messages — ARIA handles those
-  // 3. Already in a quiz or socratic flow
-  // 4. Web search queries
-  // 5. Short answers that are replies to our own drill down questions
+  // --- SKIP drill down for these cases ---
   const isPureConversation = ['hi','hello','hey','thanks','thank you',
     'ok','okay','bye','good','great','cool','nice','done','ready',
-    'yes','no','yeah','nope','sure'].some(k => msg === k || msg === k + '!');
+    'yes','no','yeah','nope','sure','got it','i see','understood',
+    'let me try','let me check','okay okay'].some(k => msg === k || msg === k + '!');
 
   const isEmotional = ['helpless','lost','stressed','anxious','scared',
     'worried','overwhelmed','frustrated','demotivated','hopeless',
-    'confused','stuck','depressed','sad','tired','exhausted',
-    'giving up','want to quit'].some(k => msg.includes(k));
+    'confused','stuck','sad','tired','exhausted','giving up',
+    'want to quit','feeling down','not okay','not well'].some(k => msg.includes(k));
 
-  const isWebSearch = intent.needsWebSearch;
-  const isQuiz      = intent.mode === 'practice' || intent.mode === 'check_answer';
-  const isFollowUp  = history.length > 1;
+  const isWebSearch  = intent.needsWebSearch;
+  const isQuiz       = intent.mode === 'practice' || intent.mode === 'check_answer';
+  const isConversation = intent.mode === 'conversation';
 
-  if (isPureConversation || isEmotional || isWebSearch || isQuiz) {
+  if (isPureConversation || isEmotional || isWebSearch || isQuiz || isConversation) {
     return { needed: false };
   }
 
-  // Read recent conversation to know what we already asked and received
+  // --- Read conversation history ---
   const recentMsgs  = history.slice(-8).map(m => (m.content || '').toLowerCase()).join(' ');
   const lastBotMsg  = history.filter(m => m.role === 'assistant').slice(-1)[0];
   const lastBotText = lastBotMsg ? (lastBotMsg.content || '').toLowerCase() : '';
 
-  // What we already know from the conversation
-  const knowsTopic = [
-    'mechanics','electromagnetism','thermodynamics','optics','waves',
+  // FIX 1 — Check CURRENT message for topic first, not memory
+  // This prevents memory from short-circuiting drill down
+  const topicKeywords = [
+    'mechanics','electromagnetism','thermodynamics','optics','waves','motion',
     'algebra','geometry','trigonometry','calculus','probability','statistics',
-    'quant','verbal','lrdi','varc','dilr',
-    'grammar','comprehension','vocabulary','reading',
+    'quant','verbal','lrdi','varc','dilr','grammar','comprehension',
+    'vocabulary','reading','sentence correction','sentence structure',
     'python','javascript','sql','machine learning','data structures',
-    'marketing','finance','operations','strategy','hr',
-    'history','geography','polity','economy','science',
-    'physics','chemistry','biology','mathematics'
-  ].some(k => recentMsgs.includes(k));
+    'marketing','finance','operations','strategy',
+    'history','geography','polity','economy',
+    'physics','chemistry','biology','mathematics','maths','math'
+  ];
 
-  const knowsHelpType = [
-    'concept','theory','understand','explain','application','applying',
-    'problems','practice','solve','exercises','speed','accuracy',
-    'revision','summary','doubt','confused about'
-  ].some(k => recentMsgs.includes(k));
+  // Topic known in CURRENT message
+  const topicInMessage = topicKeywords.some(k => msg.includes(k));
+  // Topic known in recent history (only use if not a fresh study request)
+  const topicInHistory = topicKeywords.some(k => recentMsgs.includes(k));
 
-  const knowsTime = [
-    'hour','hours','hr','hrs','mins','minutes',
-    '30 min','1 hour','2 hour','3 hour',
-    'today','tonight','all day','morning','evening',
-    'per day','daily','this week'
-  ].some(k => recentMsgs.includes(k));
+  const helpTypeKeywords = ['concept','theory','understand','explain',
+    'application','applying','problems','practice','solve',
+    'speed','accuracy','revision','doubt','confused about'];
+  const helpTypeKnown = helpTypeKeywords.some(k => recentMsgs.includes(k));
 
-  // --- DETECT what the user is asking for ---
+  const timeKeywords = ['hour','hours','hr','hrs','mins','minutes',
+    '30 min','1 hour','2 hour','today','tonight','per day','daily'];
+  const timeKnown = timeKeywords.some(k => recentMsgs.includes(k));
 
-  // Pattern: "I want to study / learn / understand X"
+  // --- DETECT what the user is asking ---
   const wantsToStudy = /i want to (study|learn|understand|revise|cover|go through)/i.test(msg)
     || /help me (study|learn|understand|with|prepare)/i.test(msg)
     || /i (need|want) help (with|on|for)/i.test(msg)
     || /can you (teach|explain|help me)/i.test(msg)
-    || /i have a (doubt|question|problem) (in|on|about|with)/i.test(msg);
+    || /i have a (doubt|question|problem) (in|on|about|with)/i.test(msg)
+    || /i am (weak|struggling|bad) (at|in|with)/i.test(msg)
+    || /i (don't|dont|do not) understand/i.test(msg);
 
-  // Pattern: "I want to prepare for X"
   const wantsToPrepare = /i want to prepare/i.test(msg)
     || /preparing for/i.test(msg)
     || /help me prepare/i.test(msg)
     || /i am preparing/i.test(msg);
 
-  // Pattern: mentions exam/subject broadly
   const mentionsExam = /(cat|gmat|gre|upsc|ssc|banking|ibps|jee|neet|gate|ielts|toefl)/i.test(msg);
-  const mentionsSubject = /(physics|chemistry|biology|mathematics|maths|math|history|geography|economics)/i.test(msg);
+  const mentionsBroadSubject = /(physics|chemistry|biology|mathematics|maths|math|history|geography|economics)/i.test(msg);
 
-  // --- DECIDE which question to ask ---
-
-  // CASE 1: Wants to study — but we don't know the topic yet
-  if (wantsToStudy && !knowsTopic) {
-    // Check if they mentioned a broad subject — ask for specific topic
-    if (mentionsSubject) {
-      const subject = msg.match(/(physics|chemistry|biology|mathematics|maths|math|history|geography|economics)/i)[0];
-      return {
-        needed: true,
-        question: 'Which topic in ' + subject.charAt(0).toUpperCase() + subject.slice(1) + '?'
-      };
+  // --- CASE 1: Wants to study broad subject — ask specific topic ---
+  if (wantsToStudy && mentionsBroadSubject && !topicInMessage) {
+    const subject = msg.match(/(physics|chemistry|biology|mathematics|maths|math|history|geography|economics)/i)[0];
+    const subjectName = subject.charAt(0).toUpperCase() + subject.slice(1);
+    const alreadyAsked = lastBotText.includes('which topic') || lastBotText.includes('what topic');
+    if (!alreadyAsked) {
+      return { needed: true, question: 'Which topic in ' + subjectName + '?' };
     }
-    return { needed: false }; // Too vague — let AI handle
   }
 
-  // CASE 2: Knows topic but we don't know what TYPE of help
-  if (wantsToStudy && knowsTopic && !knowsHelpType) {
-    // Only ask if this is the immediate next step — not if we just asked
-    const alreadyAskedHelpType = /concept or|applying it|theory or|understand or|practice or|speed or/i.test(lastBotText);
-    if (!alreadyAskedHelpType) {
+  // --- CASE 2: Wants to study specific topic — ask concept or application ---
+  if (wantsToStudy && topicInMessage && !helpTypeKnown) {
+    const alreadyAsked = /concept or|applying it|theory or|practice or/i.test(lastBotText);
+    if (!alreadyAsked) {
       return {
         needed: true,
-        question: 'Got it. Is it the concept itself that needs work — or applying it to problems?'
+        question: 'Got it. Is it the concept that needs work — or applying it to problems?'
       };
     }
   }
 
-  // CASE 3: Wants to prepare for exam — ask weakest section
-  if (wantsToPrepare && mentionsExam && !knowsTopic) {
+  // --- CASE 3: Prepare for exam — ask weakest section ---
+  if (wantsToPrepare && mentionsExam) {
     const exam = msg.match(/(cat|gmat|gre|upsc|ssc|banking|ibps|jee|neet|gate)/i);
     if (exam) {
       const examName = exam[0].toUpperCase();
-      const sectionMap = {
-        'CAT':     'Which section is weakest right now — Quant, Verbal, or LRDI?',
-        'GMAT':    'Which section needs most work — Quant, Verbal, or Data Insights?',
-        'GRE':     'Which section needs most work — Quant or Verbal?',
-        'UPSC':    'Which area feels weakest — History, Geography, Polity, or Current Affairs?',
-        'JEE':     'Which subject needs most work — Physics, Chemistry, or Maths?',
-        'NEET':    'Which subject needs most work — Physics, Chemistry, or Biology?',
-        'GATE':    'Which topic area feels weakest?',
-        'SSC':     'Which section needs most work — Quant, English, or Reasoning?',
-        'BANKING': 'Which section needs most work — Quant, English, or Reasoning?',
-        'IBPS':    'Which section needs most work — Quant, English, or Reasoning?'
-      };
-      return {
-        needed: true,
-        question: sectionMap[examName] || 'Which area feels weakest right now?'
-      };
+      const alreadyAsked = /which section|which area|which subject|weakest/i.test(lastBotText);
+      if (!alreadyAsked) {
+        const sectionMap = {
+          'CAT':     'Which section is weakest right now — Quant, Verbal, or LRDI?',
+          'GMAT':    'Which section needs most work — Quant, Verbal, or Data Insights?',
+          'GRE':     'Which section needs most work — Quant or Verbal?',
+          'UPSC':    'Which area feels weakest — History, Geography, Polity, or Current Affairs?',
+          'JEE':     'Which subject needs most work — Physics, Chemistry, or Maths?',
+          'NEET':    'Which subject needs most work — Physics, Chemistry, or Biology?',
+          'GATE':    'Which topic area feels weakest?',
+          'SSC':     'Which section needs most work — Quant, English, or Reasoning?',
+          'BANKING': 'Which section needs most work — Quant, English, or Reasoning?',
+          'IBPS':    'Which section needs most work — Quant, English, or Reasoning?'
+        };
+        return { needed: true, question: sectionMap[examName] || 'Which area feels weakest right now?' };
+      }
     }
   }
 
-  // CASE 4: Know topic + help type but not time — ask time
-  if (knowsTopic && knowsHelpType && !knowsTime && isFollowUp) {
+  // --- CASE 4: Topic + help type known — ask time → then offer sprint ---
+  if (topicInHistory && helpTypeKnown && !timeKnown && history.length > 2) {
     const alreadyAskedTime = /how much time|how many hours|how long/i.test(lastBotText);
     if (!alreadyAskedTime) {
       return {
@@ -2128,6 +2146,14 @@ function getDrillDownQuestion(message, history, intent) {
     }
   }
 
-  // All 3 known OR not a drill-down situation — let AI respond
+  // --- FIX 3: All 3 known — inject sprint instruction into intent ---
+  // This tells the AI to offer a sprint now, not a generic plan
+  if (topicInHistory && helpTypeKnown && timeKnown && history.length > 3) {
+    const alreadyOfferedSprint = /sprint|timer starts|question 1 of|let's go/i.test(lastBotText);
+    if (!alreadyOfferedSprint) {
+      intent._sprintInstruction = true;
+    }
+  }
+
   return { needed: false };
 }
