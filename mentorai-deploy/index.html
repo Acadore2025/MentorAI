@@ -52,6 +52,9 @@ pointer-events:none;z-index:0}
 .btn-ghost:hover{border-color:var(--accent);color:var(--accent)}
 .floating-tags{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:500px;margin-bottom:48px}
 .ftag{font-size:12px;padding:5px 14px;border-radius:20px;border:1px solid var(--border);color:var(--muted);background:var(--surface)}
+.welcome-signin{margin-top:16px;font-size:13px;color:var(--muted2)}
+.welcome-signin span{color:var(--accent);cursor:pointer;font-weight:500}
+.welcome-signin span:hover{opacity:0.8}
 
 /* -- ONBOARDING -- */
 #screen-onboard{background:var(--bg)}
@@ -497,17 +500,29 @@ kbd{
 
 <!-- == SCREEN 1: WELCOME == -->
 <div class="screen hidden" id="screen-welcome">
+
+  <!-- Logo -->
   <div class="logo-big">Mentor<span>AI</span></div>
-  <p class="tagline">Your personal AI mentor that truly knows you - your personality, your goals, your pace.</p>
+  <p class="tagline">Your personal AI mentor that truly knows you —<br>your personality, your goals, your pace.</p>
+
+  <!-- Feature tags — no emojis, clean text only -->
   <div class="floating-tags">
-    <span class="ftag"> Psychometric Profiling</span>
-    <span class="ftag"> Goal Tracking</span>
-    <span class="ftag"> Smart AI Routing</span>
-    <span class="ftag"> Streaks & XP</span>
-    <span class="ftag"> Mentor Personas</span>
-    <span class="ftag"> Voice Input</span>
+    <span class="ftag">Psychometric Profiling</span>
+    <span class="ftag">Goal Tracking</span>
+    <span class="ftag">Smart AI Routing</span>
+    <span class="ftag">Streaks &amp; XP</span>
+    <span class="ftag">4 Mentor Personas</span>
+    <span class="ftag">Voice Input</span>
   </div>
-  <button class="btn-primary" onclick="goTo('screen-auth')">Begin Your Journey -></button>
+
+  <!-- Primary CTA -->
+  <button class="btn-primary" onclick="goTo('screen-auth')" style="min-width:220px">
+    Begin Your Journey &#8594;
+  </button>
+
+  <!-- Returning user shortcut -->
+  <p class="welcome-signin">Already have an account? <span onclick="goToSignIn()">Sign in &#8594;</span></p>
+
 </div>
 
 <!-- == AUTH: SIGN IN / SIGN UP == -->
@@ -604,22 +619,22 @@ kbd{
   </div>
   <div class="persona-grid">
     <div class="persona-card" data-p="coach" onclick="selectPersona(this)">
-      <span class="persona-emoji"></span>
+      <span class="persona-emoji">🏋️</span>
       <div class="persona-name">The Coach</div>
       <div class="persona-desc">Direct, tough-love, no excuses. Pushes you beyond your comfort zone.</div>
     </div>
     <div class="persona-card" data-p="strategist" onclick="selectPersona(this)">
-      <span class="persona-emoji"></span>
+      <span class="persona-emoji">♟️</span>
       <div class="persona-name">The Strategist</div>
       <div class="persona-desc">Logical, data-driven, structured. Breaks everything into clear systems.</div>
     </div>
     <div class="persona-card" data-p="friend" onclick="selectPersona(this)">
-      <span class="persona-emoji"></span>
+      <span class="persona-emoji">🤝</span>
       <div class="persona-name">The Friend</div>
       <div class="persona-desc">Warm, casual, empathetic. Feels like talking to your smartest friend.</div>
     </div>
     <div class="persona-card" data-p="sage" onclick="selectPersona(this)">
-      <span class="persona-emoji"></span>
+      <span class="persona-emoji">🦉</span>
       <div class="persona-name">The Sage</div>
       <div class="persona-desc">Philosophical, deep, thought-provoking. Asks the questions you avoid.</div>
     </div>
@@ -630,15 +645,15 @@ kbd{
 <!-- == SCREEN 6: API KEYS == -->
 <div class="screen hidden" id="screen-keys">
   <div class="keys-card" style="text-align:center">
-    <div style="font-size:48px;margin-bottom:16px"></div>
+    <div style="font-size:48px;margin-bottom:16px">🎓</div>
     <div class="keys-title">You're all set!</div>
     <p class="keys-sub" style="margin-bottom:28px">Your AI mentor is powered by Claude, GPT-4o, and Gemini - all connected securely. No setup needed.</p>
     <div style="display:flex;gap:10px;justify-content:center;margin-bottom:28px">
-      <span style="font-size:12px;padding:6px 14px;border-radius:20px;border:1px solid rgba(232,200,122,0.3);color:var(--accent)">v Claude</span>
-      <span style="font-size:12px;padding:6px 14px;border-radius:20px;border:1px solid rgba(125,211,168,0.3);color:var(--accent3)">v GPT-4o</span>
-      <span style="font-size:12px;padding:6px 14px;border-radius:20px;border:1px solid rgba(91,164,207,0.3);color:var(--accent2)">v Gemini</span>
+      <span style="font-size:12px;padding:6px 14px;border-radius:20px;border:1px solid rgba(232,200,122,0.3);color:var(--accent)">✓ Claude</span>
+      <span style="font-size:12px;padding:6px 14px;border-radius:20px;border:1px solid rgba(125,211,168,0.3);color:var(--accent3)">✓ GPT-4o</span>
+      <span style="font-size:12px;padding:6px 14px;border-radius:20px;border:1px solid rgba(91,164,207,0.3);color:var(--accent2)">✓ Gemini</span>
     </div>
-    <button class="btn-primary" onclick="saveKeysAndStart()" style="width:100%">Begin My Journey -></button>
+    <button class="btn-primary" onclick="saveKeysAndStart()" style="width:100%">Begin My Journey &#8594;</button>
   </div>
 </div>
 
@@ -656,16 +671,22 @@ kbd{
     </div>
     <div class="header-actions">
       <div class="persona-indicator" id="persona-ind">Coach</div>
-      <button class="icon-btn" onclick="toggleSettings()" title="Settings"></button>
-      <button class="icon-btn" onclick="resetAll()" title="Reset"></button>
-      <button class="icon-btn" onclick="signOut()" title="Sign Out" style="color:var(--danger)"></button>
+      <button class="icon-btn" onclick="toggleSettings()" title="Settings" aria-label="Settings">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      </button>
+      <button class="icon-btn" onclick="resetAll()" title="Reset session" aria-label="Reset session">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
+      </button>
+      <button class="icon-btn" onclick="signOut()" title="Sign out" aria-label="Sign out" style="color:var(--danger)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+      </button>
     </div>
   </div>
 
   <div class="xp-bar-wrap">
     <span class="xp-label" id="xp-label">XP: 0 / 100</span>
     <div class="xp-bar"><div class="xp-fill" id="xp-fill" style="width:0%"></div></div>
-    <div class="streak-badge" id="streak-badge"> 0 day streak</div>
+    <div class="streak-badge" id="streak-badge">🔥 0 day streak</div>
   </div>
 
   <div id="route-status">
@@ -772,6 +793,12 @@ try {
       insert: async()=>({error:null})
     })
   };
+}
+
+// Helper — used by welcome screen "Already have an account? Sign in" link
+function goToSignIn(){
+  goTo('screen-auth');
+  switchTab('login');
 }
 
 // -- AUTH TAB SWITCH ------------------------------------------
@@ -922,12 +949,12 @@ async function handleAuth(){
 // -- LOAD EXISTING USER PROFILE -------------------------------
 async function loadUserProfile(){
   try {
-    console.log(' Loading profile for user:', currentUser.id, currentUser.email);
+    console.log('[PROFILE] Loading for user:', currentUser.id, currentUser.email);
     const { data, error } = await sb.from('user_profiles').select('*').eq('id', currentUser.id).single();
-    console.log(' Supabase response:', JSON.stringify({data: data ? {name:data.name, personality_type:data.personality_type, role:data.role} : null, error}));
+    console.log('[PROFILE] Supabase response:', JSON.stringify({data: data ? {name:data.name, personality_type:data.personality_type, role:data.role} : null, error}));
 
     if(error || !data || (!data.name && !data.personality_type && !data.role)){
-      console.log(' No profile found - going to onboarding');
+      console.log('[PROFILE] No profile found - going to onboarding');
       goTo('screen-onboard');
       initOnboard();
       return;
@@ -990,9 +1017,9 @@ async function loadUserProfile(){
 
     // If personality test done -> they are a returning user -> go straight to app
     // Never re-run personality test for existing users
-    console.log(' Profile loaded. personalityType:', profile.personalityType, '| role:', profile.role, '| goal:', profile.goal);
+    console.log('[PROFILE] Loaded. personalityType:', profile.personalityType, '| role:', profile.role, '| goal:', profile.goal);
     if(profile.personalityType){
-      console.log(' Going straight to app');
+      console.log('[PROFILE] Complete — going straight to app');
       launchApp();
       return;
     }
@@ -1444,28 +1471,28 @@ function loadReturning(){
 // ===============================================================
 const ONBOARD_STEPS = [
   {q:"What best describes you right now?", sub:"Be honest. This changes everything about how your mentor advises you.", type:"choice", key:"role", choices:[
-    {icon:"",label:"Student"},
-    {icon:"",label:"Working Professional"},
-    {icon:"",label:"Entrepreneur / Founder"},
-    {icon:"",label:"Switching Careers"}
+    {icon:"🎓",label:"Student"},
+    {icon:"💼",label:"Working Professional"},
+    {icon:"🚀",label:"Entrepreneur / Founder"},
+    {icon:"🔀",label:"Switching Careers"}
   ]},
   {q:"What's the ONE thing you most want to change?", sub:"Pick your primary goal. You can add more later.", type:"choice", key:"goal", choices:[
-    {icon:"",label:"Advance my career"},
-    {icon:"",label:"Build new skills"},
-    {icon:"",label:"Find my direction in life"},
-    {icon:"",label:"Build something of my own"}
+    {icon:"📈",label:"Advance my career"},
+    {icon:"🛠️",label:"Build new skills"},
+    {icon:"🧭",label:"Find my direction in life"},
+    {icon:"💡",label:"Build something of my own"}
   ]},
   {q:"How urgent is this for you?", sub:"Urgency completely changes the strategy.", type:"choice", key:"timeline", choices:[
-    {icon:"",label:"Very urgent - need results in weeks"},
-    {icon:"",label:"3-6 months"},
-    {icon:"",label:"1 year, steady and sustainable"},
-    {icon:"",label:"Long game, no fixed deadline"}
+    {icon:"⚡",label:"Very urgent - need results in weeks"},
+    {icon:"📅",label:"3-6 months"},
+    {icon:"🌱",label:"1 year, steady and sustainable"},
+    {icon:"♾️",label:"Long game, no fixed deadline"}
   ]},
   {q:"How do you learn best?", sub:"Your mentor will give advice in your natural learning style.", type:"choice", key:"learnStyle", choices:[
-    {icon:"",label:"By doing projects & building things"},
-    {icon:"",label:"By listening - podcasts, talks, conversations"},
-    {icon:"",label:"By reading - articles, books, docs"},
-    {icon:"",label:"By discussing with people"}
+    {icon:"🔨",label:"By doing projects & building things"},
+    {icon:"🎧",label:"By listening - podcasts, talks, conversations"},
+    {icon:"📖",label:"By reading - articles, books, docs"},
+    {icon:"💬",label:"By discussing with people"}
   ]}
 ];
 
@@ -1912,10 +1939,10 @@ function updateHUD(){
   document.getElementById('hdr-level').textContent = `Level ${profile.level}`;
   document.getElementById('xp-label').textContent = `XP: ${profile.xp} / ${profile.level*100}`;
   document.getElementById('xp-fill').style.width = ((profile.xp%(profile.level*100))/(profile.level*100)*100)+'%';
-  document.getElementById('streak-badge').textContent = ` ${profile.streak} day streak`;
+  document.getElementById('streak-badge').textContent = `🔥 ${profile.streak} day streak`;
   const pi = document.getElementById('persona-ind');
-  const pNames = {coach:' Coach',strategist:' Strategist',friend:' Friend',sage:' Sage'};
-  pi.textContent = pNames[profile.persona];
+  const pNames = {coach:'🏋️ Coach', strategist:'♟️ Strategist', friend:'🤝 Friend', sage:'🦉 Sage'};
+  pi.textContent = pNames[profile.persona] || profile.persona;
   pi.className = `persona-indicator ${profile.persona}`;
 }
 
@@ -1924,7 +1951,7 @@ function addXP(pts){
   if(profile.xp >= profile.level*100){
     profile.xp -= profile.level*100;
     profile.level++;
-    showXPPopup(` Level Up! You're now Level ${profile.level}!`);
+    showXPPopup(`🏆 Level Up! You're now Level ${profile.level}!`);
   } else {
     showXPPopup(`+${pts} XP`);
   }
@@ -2292,9 +2319,9 @@ function showDailyCheckin(){
     <div class="checkin-title">Daily Check-in</div>
     <div class="checkin-text">${text}</div>
     <div class="checkin-btns">
-      <div class="checkin-btn" onclick="sendQuick('I made progress yesterday!')"> Made progress</div>
-      <div class="checkin-btn" onclick="sendQuick('I struggled yesterday, need help')"> Struggled</div>
-      <div class="checkin-btn" onclick="sendQuick('New challenge today, need guidance')"> New challenge</div>
+      <div class="checkin-btn" onclick="sendQuick('I made progress yesterday!')">✅ Made progress</div>
+      <div class="checkin-btn" onclick="sendQuick('I struggled yesterday, need help')">😓 Struggled</div>
+      <div class="checkin-btn" onclick="sendQuick('New challenge today, need guidance')">🎯 New challenge</div>
     </div>`;
   document.getElementById('messages').appendChild(div);
   scrollDown();
@@ -3064,175 +3091,6 @@ function triggerLogIfNeeded(){
 window.addEventListener('beforeunload', ()=>logToSheet('session_end'));
 
 // ===============================================================
-// HIDDEN ADMIN PANEL
-// ===============================================================
-const ADMIN_PASSWORD = 'mentorai2024'; // Change this to your own password
-let adminUnlocked = false;
-let adminKeyBuffer = '';
-
-// Secret keyboard shortcut: type "admin" anywhere to trigger password prompt
-document.addEventListener('keydown', e=>{
-  if(document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT') return;
-  adminKeyBuffer += (e.key || '').toLowerCase();
-  if(adminKeyBuffer.length > 5) adminKeyBuffer = adminKeyBuffer.slice(-5);
-  if(adminKeyBuffer === 'admin') openAdminPanel();
-});
-
-function openAdminPanel(){
-  if(!adminUnlocked){
-    const pwd = prompt(' Admin Access - Enter Password:');
-    if(pwd !== ADMIN_PASSWORD){ alert('Wrong password.'); adminKeyBuffer=''; return; }
-    adminUnlocked = true;
-  }
-  showAdminDashboard();
-}
-
-function showAdminDashboard(){
-  // Gather all data from localStorage across all "users" on this device
-  const allSessions = [];
-  for(let i=0; i<localStorage.length; i++){
-    const key = localStorage.key(i);
-    if(key === 'mentorProfile'){
-      try{
-        const p = JSON.parse(localStorage.getItem(key));
-        const msgs = JSON.parse(localStorage.getItem('mentorMessages')||'[]');
-        allSessions.push({profile:p, messages:msgs});
-      }catch(e){}
-    }
-  }
-
-  const p = profile;
-  const userMsgs = messages.filter(m=>m.role==='user');
-  const aiMsgs = messages.filter(m=>m.role==='assistant');
-  const modelCounts = {};
-  aiMsgs.forEach(m=>{ if(m.model) modelCounts[m.model]=(modelCounts[m.model]||0)+1; });
-
-  const panel = document.createElement('div');
-  panel.id = 'admin-panel';
-  panel.style.cssText = `position:fixed;inset:0;z-index:9999;background:rgba(8,10,15,0.97);overflow-y:auto;padding:32px 24px;font-family:'Outfit',sans-serif;color:#ede9e0;`;
-  panel.innerHTML = `
-    <div style="max-width:900px;margin:0 auto">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:32px">
-        <div>
-          <div style="font-family:'Cormorant Garamond',serif;font-size:32px;font-weight:700;color:#e8c87a">Admin Dashboard</div>
-          <div style="font-size:13px;color:#6b7280;margin-top:4px">MentorAI - Founder View  ${new Date().toDateString()}</div>
-        </div>
-        <div style="display:flex;gap:10px">
-          <button onclick="exportCSV()" style="background:#e8c87a;color:#080a0f;border:none;border-radius:10px;padding:10px 20px;font-size:13px;font-weight:600;cursor:pointer;font-family:'Outfit',sans-serif"> Export CSV</button>
-          <button onclick="document.getElementById('admin-panel').remove();adminUnlocked=false;" style="background:transparent;border:1px solid rgba(255,255,255,0.1);color:#6b7280;border-radius:10px;padding:10px 20px;font-size:13px;cursor:pointer;font-family:'Outfit',sans-serif"> Close</button>
-        </div>
-      </div>
-
-      <!-- STATS ROW -->
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:28px">
-        ${statCard('Total Messages', userMsgs.length, '#e8c87a')}
-        ${statCard('AI Responses', aiMsgs.length, '#5ba4cf')}
-        ${statCard('XP Level', 'Level ' + (p.level||1), '#7dd3a8')}
-        ${statCard('Day Streak', (p.streak||0) + ' days', '#e0a870')}
-        ${statCard('Session Time', Math.round((Date.now()-sessionStart)/60000) + ' mins', '#a78bfa')}
-        ${statCard('Sentiment', getSentiment(), getSentiment()==='Positive'?'#7dd3a8':getSentiment()==='Frustrated'?'#e07070':'#6b7280')}
-      </div>
-
-      <!-- USER PROFILE -->
-      <div style="background:#0f1219;border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:20px;margin-bottom:20px">
-        <div style="font-size:12px;color:#e8c87a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:14px">User Profile</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;font-size:13px">
-          ${profileRow('Name', p.name)}
-          ${profileRow('Personality', (p.personalityType||'?') + ' ' + (p.personalityEmoji||''))}
-          ${profileRow('Role', p.role||'?')}
-          ${profileRow('Goal', p.goal||'?')}
-          ${profileRow('Timeline', p.timeline||'?')}
-          ${profileRow('Learn Style', p.learnStyle||'?')}
-          ${profileRow('Mentor Persona', p.persona||'?')}
-          ${profileRow('Topics', getTopics())}
-          ${profileRow('Models Used', getModelsUsed())}
-        </div>
-      </div>
-
-      <!-- AI MODEL USAGE -->
-      <div style="background:#0f1219;border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:20px;margin-bottom:20px">
-        <div style="font-size:12px;color:#e8c87a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:14px">AI Model Usage</div>
-        <div style="display:flex;gap:16px;flex-wrap:wrap">
-          ${Object.entries(modelCounts).map(([m,c])=>`
-            <div style="background:#161b25;border-radius:10px;padding:12px 18px;text-align:center">
-              <div style="font-size:22px;font-weight:700;color:${{claude:'#e8c87a',openai:'#7dd3a8',gemini:'#5ba4cf'}[m]||'#fff'}">${c}</div>
-              <div style="font-size:11px;color:#6b7280;margin-top:2px">${{claude:'Claude',openai:'GPT-4o',gemini:'Gemini'}[m]||m}</div>
-            </div>`).join('')}
-          ${Object.keys(modelCounts).length===0?'<div style="color:#6b7280;font-size:13px">No AI responses yet</div>':''}
-        </div>
-      </div>
-
-      <!-- FULL CHAT LOG -->
-      <div style="background:#0f1219;border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:20px">
-        <div style="font-size:12px;color:#e8c87a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:14px">Full Chat Log (${messages.length} messages)</div>
-        <div style="max-height:400px;overflow-y:auto;display:flex;flex-direction:column;gap:10px">
-          ${messages.map((m,i)=>`
-            <div style="background:#161b25;border-radius:10px;padding:12px 14px;border-left:3px solid ${m.role==='user'?'#5ba4cf':'#e8c87a'}">
-              <div style="font-size:10px;color:#6b7280;margin-bottom:5px;display:flex;justify-content:space-between">
-                <span>${m.role==='user'?' '+p.name:' MentorAI'+(m.model?' ('+m.model+')':'')}</span>
-                <span>#${i+1}</span>
-              </div>
-              <div style="font-size:13px;line-height:1.6;color:#ede9e0">${(m.content||'').substring(0,300)}${m.content?.length>300?'...':''}</div>
-            </div>`).join('')}
-          ${messages.length===0?'<div style="color:#6b7280;font-size:13px">No messages yet</div>':''}
-        </div>
-      </div>
-
-      <div style="text-align:center;margin-top:20px;font-size:11px;color:#4b5563">
-        Type "admin" anywhere (outside input boxes) to reopen this panel  Password: ${ADMIN_PASSWORD}
-      </div>
-    </div>`;
-  document.body.appendChild(panel);
-}
-
-function statCard(label, value, color){
-  return `<div style="background:#0f1219;border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:16px;text-align:center">
-    <div style="font-size:22px;font-weight:700;color:${color}">${value}</div>
-    <div style="font-size:11px;color:#6b7280;margin-top:3px">${label}</div>
-  </div>`;
-}
-
-function profileRow(label, value){
-  return `<div style="background:#161b25;border-radius:8px;padding:10px 12px">
-    <div style="font-size:10px;color:#6b7280;margin-bottom:3px">${label}</div>
-    <div style="font-size:13px;color:#ede9e0;font-weight:500">${value||'-'}</div>
-  </div>`;
-}
-
-function exportCSV(){
-  const p = profile;
-  const headers = ['Timestamp','Name','Personality','Persona','Role','Goal','Timeline','LearnStyle','TotalMessages','Topics','ModelsUsed','Sentiment','XPLevel','Streak','SessionMins','LastMessage'];
-  const row = [
-    new Date().toISOString(),
-    p.name, p.personalityType, p.persona, p.role, p.goal, p.timeline, p.learnStyle,
-    messages.filter(m=>m.role==='user').length,
-    getTopics(), getModelsUsed(), getSentiment(),
-    p.level, p.streak,
-    Math.round((Date.now()-sessionStart)/60000),
-    (messages.filter(m=>m.role==='user').slice(-1)[0]?.content||'').replace(/,/g,' ').substring(0,200)
-  ];
-
-  // Also add full chat log rows
-  const chatHeaders = ['#','Role','Model','Message'];
-  const chatRows = messages.map((m,i)=>[i+1, m.role, m.model||'', (m.content||'').replace(/,/g,' ').replace(/\n/g,' ').substring(0,500)]);
-
-  let csv = '=== SESSION SUMMARY ===\n';
-  csv += headers.join(',') + '\n';
-  csv += row.map(v=>`"${v}"`).join(',') + '\n\n';
-  csv += '=== FULL CHAT LOG ===\n';
-  csv += chatHeaders.join(',') + '\n';
-  csv += chatRows.map(r=>r.map(v=>`"${v}"`).join(',')).join('\n');
-
-  const blob = new Blob([csv], {type:'text/csv'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `mentorai_${p.name||'user'}_${new Date().toISOString().split('T')[0]}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-// ===============================================================
 // TEXTAREA AUTO-RESIZE & KEYBOARD
 // ===============================================================
 const ta = document.getElementById('user-input');
@@ -3310,18 +3168,21 @@ function startApp() {
   try {
     // Hide all screens first
     document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
-    // Show auth screen
-    document.getElementById('screen-auth').classList.remove('hidden');
-    switchTab('login');
 
-    // Check if user already has active session
+    // Check session first — returning users skip welcome screen entirely
     sb.auth.getSession().then(({ data: { session } }) => {
       if(session && session.user){
+        // Returning user: go straight to the app
         currentUser = session.user;
         loadUserProfile();
+      } else {
+        // New visitor: show the welcome screen so they understand MentorAI before signing up
+        document.getElementById('screen-welcome').classList.remove('hidden');
       }
     }).catch(err => {
       console.error('Session check failed:', err);
+      // Fallback: show welcome screen
+      document.getElementById('screen-welcome').classList.remove('hidden');
     });
 
     // Listen for auth changes
